@@ -18,13 +18,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ TrovaPrezzi & Usato (Istantaneo)")
-st.markdown("<p style='color: #718096;'>Ricerca alimentata da Groq Llama per la massima velocità.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #718096;'>Ricerca alimentata da Groq per la massima velocità.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
 groq_api_key = st.secrets.get("GROQ_API_KEY", "") or st.sidebar.text_input("Groq API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key (per le foto)", type="password")
+
+# Lista modelli Groq da provare in sequenza automatica
+MODELLI_GROQ = [
+    "llama3-8b-8192",
+    "llama3-70b-8192",
+    "llama-3.2-3b-preview",
+    "mixtral-8x7b-32768"
+]
 
 # Funzione per identificare il prodotto dalla foto con Gemini (Vision)
 def identifica_prodotto_da_foto(image_file, api_key):
@@ -54,19 +62,28 @@ def cerca_sul_web(_api_key, query):
         return []
     return []
 
-# Funzione per generare la risposta con Groq (Modello universale standard llama-3.1-8b-instant)
+# Funzione per generare la risposta con Groq tentando i vari modelli disponibili
 def elabora_con_groq(prompt_sistema, dati_web, api_key):
     client = Groq(api_key=api_key)
-    completion = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": prompt_sistema},
-            {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
-        ],
-        temperature=0.2,
-        max_tokens=1024,
-    )
-    return completion.choices[0].message.content
+    ultimo_errore = None
+    
+    for m in MODELLI_GROQ:
+        try:
+            completion = client.chat.completions.create(
+                model=m,
+                messages=[
+                    {"role": "system", "content": prompt_sistema},
+                    {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
+                ],
+                temperature=0.2,
+                max_tokens=1024,
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            ultimo_errore = e
+            continue
+            
+    raise Exception(f"Nessun modello Groq disponibile ha risposto. Ultimo errore: {ultimo_errore}")
 
 # --- INPUT ---
 st.markdown("### 1. Inserisci o fotografa il prodotto")
