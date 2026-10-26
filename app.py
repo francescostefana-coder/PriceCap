@@ -19,8 +19,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ TrovaPrezzi & Usato (Filtrato & Pertinente)")
-st.markdown("<p style='color: #718096;'>Filtro anti-spazzatura per risultati pertinenti e prezzi reali in Italia.</p>", unsafe_allow_html=True)
+st.title("⚡ TrovaPrezzi & Usato (Foto & Filtri)")
+st.markdown("<p style='color: #718096;'>Carica una foto del prodotto o scrivi il nome per cercare in Italia.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
@@ -49,22 +49,20 @@ def e_risultato_pertinente(titolo, snippet, prodotto_cercato):
     """Verifica che il risultato parli davvero del prodotto inserito e non sia un blog/guida"""
     testo_totale = f"{titolo} {snippet}".lower()
     
-    # 1. Controlla Blacklist
     for bad_word in BLACKLIST_TERMINI:
         if bad_word in testo_totale:
             return False
             
-    # 2. Controlla che le parole chiave principali del prodotto siano presenti
     parole_prodotto = [p.lower() for p in prodotto_cercato.split() if len(p) > 2]
     matches = sum(1 for p in parole_prodotto if p in testo_totale)
     
-    # Deve contenere almeno la metà delle parole chiave del prodotto
     if parole_prodotto and (matches / len(parole_prodotto)) < 0.5:
         return False
         
     return True
 
 def identifica_prodotto_da_foto(image_file, api_key):
+    """Analisi visiva dell'immagine con Gemini e gestione errori dettagliata"""
     try:
         client = genai.Client(api_key=api_key)
         img = Image.open(image_file)
@@ -72,8 +70,11 @@ def identifica_prodotto_da_foto(image_file, api_key):
             model=MODELLO_IA,
             contents=[img, "Scrivi SOLO il nome esatto del prodotto (marca e modello), senza altre parole."]
         )
-        return response.text.strip()
-    except Exception:
+        if response and response.text:
+            return response.text.strip()
+        return ""
+    except Exception as e:
+        st.error(f"Errore tecnico durante la lettura della foto: {e}")
         return ""
 
 def cerca_sul_web_sicura(tavily_key, query):
@@ -128,9 +129,6 @@ def cerca_sul_web_sicura(tavily_key, query):
     return [], "Nessuno"
 
 def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercato, api_key):
-    """
-    Tenta la sintesi via Gemini. Se in Fallback, applica il filtro di pertinenza rigido.
-    """
     if api_key:
         try:
             client = genai.Client(api_key=api_key)
@@ -143,7 +141,7 @@ def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercat
         except Exception:
             pass
 
-    # --- FALLBACK DIRETTO CON FILTRO DI PERTINANZA ---
+    # Fallback diretto con filtri
     tabella_diretta = "| Prodotto / Titolo | Prezzo (€) | Link Offerta |\n| :--- | :--- | :--- |\n"
     conteggio_validi = 0
     
@@ -172,15 +170,17 @@ with tab1:
 with tab2:
     foto = st.file_uploader("Carica foto", type=["jpg", "jpeg", "png"])
     if foto:
+        st.image(foto, caption="Foto caricata", width=250)
         if not gemini_api_key:
-            st.warning("⚠️ Inserisci la Gemini API Key per analizzare la foto.")
+            st.error("⚠️ Inserisci la Gemini API Key nella barra laterale per analizzare la foto.")
         else:
-            with st.spinner("Riconoscimento immagine in corso..."):
-                prodotto_base = identifica_prodotto_da_foto(foto, gemini_api_key)
-                if prodotto_base:
-                    st.success(f"Prodotto rilevato: **{prodotto_base}**")
+            with st.spinner("Riconoscimento immagine in corso con Gemini..."):
+                prodotto_rilevato = identifica_prodotto_da_foto(foto, gemini_api_key)
+                if prodotto_rilevato:
+                    prodotto_base = prodotto_rilevato
+                    st.success(f"Prodotto rilevato con successo: **{prodotto_base}**")
                 else:
-                    st.error("Impossibile leggere la foto automaticamente. Scrivi il nome nel box a fianco.")
+                    st.warning("Non è stato possibile identificare il prodotto dalla foto. Puoi comunque scriverlo nel box a fianco.")
 
 st.markdown("---")
 
@@ -206,11 +206,11 @@ with cat2:
 # --- ESECUZIONE ---
 if tipo:
     if not prodotto_base:
-        st.warning("⚠️ Inserisci prima il nome di un prodotto o carica una foto.")
+        st.warning("⚠️ Inserisci prima il nome di un prodotto o carica una foto valida.")
     else:
         with st.status("🚀 Ricerca offerte in corso...", expanded=True) as status:
             
-            st.write("🔍 Scansione store e mercatini...")
+            st.write(f"🔍 Scansione per: **{prodotto_base}**...")
             
             if tipo == "nuovo":
                 query_web = f'"{prodotto_base}" prezzo acquista (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trovaprezzi.it)'
@@ -220,47 +220,4 @@ if tipo:
                     "1. Store / Titolo | 2. Prezzo (€) | 3. Link ([Vai al Sito](URL))\n\n"
                     "REGOLE RIGIDE:\n"
                     "- Filtra ed ESCLUDI del tutto articoli non pertinenti, recensioni, o guide.\n"
-                    "- Mostra SOLO inserzioni di vendita reali per '" + prodotto_base + "'.\n"
-                    "- Inserisci SEMPRE il prezzo numerico in Euro (€) nella colonna Prezzo.\n"
-                    "- Ordina dal prezzo più basso. Rispondi in italiano."
-                )
-            else:
-                if modo_usato == "Ritiro a mano (Zona)":
-                    if not zona:
-                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
-                        st.stop()
-                    query_web = f'"{prodotto_base}" {zona} (site:subito.it OR site:ebay.it)'
-                    prompt_ia = (
-                        "Sei un assistente per l'usato in Italia. Cerca annunci per '" + prodotto_base + "' con ritiro a mano a " + zona + ".\n"
-                        "Crea una TABELLA Markdown con colonne esatte:\n"
-                        "1. Piattaforma / Titolo | 2. Prezzo (€) | 3. Link ([Vai all'Annuncio](URL))\n\n"
-                        "REGOLE RIGIDE:\n"
-                        "- Mostra SOLO annunci pertinenti a '" + prodotto_base + "' a " + zona + ".\n"
-                        "- Escludi guide, notizie o prodotti diversi. Rispondi in italiano."
-                    )
-                else:
-                    query_web = f'"{prodotto_base}" (site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it)'
-                    prompt_ia = (
-                        "Sei un assistente per l'usato in Italia. Cerca annunci per '" + prodotto_base + "'.\n"
-                        "Crea una TABELLA Markdown con colonne esatte:\n"
-                        "1. Piattaforma / Titolo | 2. Prezzo (€) | 3. Link ([Vai all'Annuncio](URL))\n\n"
-                        "REGOLE RIGIDE:\n"
-                        "- Mostra SOLO annunci di vendita reali per '" + prodotto_base + "'.\n"
-                        "- Escludi pubblicità, articoli di blog o recensioni. Rispondi in italiano."
-                    )
-
-            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
-            
-            if not risultati_web:
-                status.update(label="❌ Nessun risultato trovato in Italia.", state="error")
-                st.warning("Nessun dato trovato per l'Italia. Prova con termini di ricerca più generici.")
-            else:
-                st.write(f"🤖 Filtraggio pertinenza ed estrazione prezzi ({motore_usato})...")
-                
-                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(
-                    prompt_ia, risultati_web, prodotto_base, gemini_api_key
-                )
-                
-                status.update(label=f"✅ Completato ({modalita_output})!", state="complete")
-                st.markdown("### 📊 Risultati della Ricerca")
-                st.markdown(risultato_finale)
+                    "- Mostra SOLO inserzioni di vendita reali per '" + prodotto_
