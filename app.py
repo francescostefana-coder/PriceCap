@@ -2,10 +2,11 @@ import streamlit as st
 import requests
 from PIL import Image
 from google import genai
-from duckduckgo_search import DDGS
+import urllib.parse
+from bs4 import BeautifulSoup
 
 # Configurazione pagina
-st.set_page_config(page_title="TrovaPrezzi Multi-AI & Free", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="TrovaPrezzi AI", page_icon="⚡", layout="centered")
 
 # --- GRAFICA MINIMALE ---
 st.markdown("""
@@ -17,8 +18,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ TrovaPrezzi & Usato (Multi-Engine)")
-st.markdown("<p style='color: #718096;'>Ricerca intelligente con fallback automatico su motori gratuiti.</p>", unsafe_allow_html=True)
+st.title("⚡ TrovaPrezzi & Usato AI")
+st.markdown("<p style='color: #718096;'>Ricerca protetta con timeout rigorosi anti-blocco.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
@@ -30,7 +31,6 @@ MODELLO_IA = 'gemini-3.8-flash'
 # --- FUNZIONI CORE ---
 
 def identifica_prodotto_da_foto(image_file, api_key):
-    """Analisi visiva dell'immagine con Gemini"""
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
     response = client.models.generate_content(
@@ -39,57 +39,53 @@ def identifica_prodotto_da_foto(image_file, api_key):
     )
     return response.text.strip()
 
-def cerca_sul_web_ibrida(tavily_key, query):
+def cerca_sul_web_sicura(tavily_key, query):
     """
-    Motore di ricerca ibrido:
-    1. Prova Tavily (se configurato)
-    2. Fallback automatico su DuckDuckGo (Gratuito, senza chiavi)
+    Funzione di ricerca protetta con timeout rigidi per impedire il blocco dell'app.
     """
     risultati = []
     
-    # Tentativo 1: Tavily API
+    # 1. Tentativo Tavily (se configurato)
     if tavily_key:
-        url = "https://api.tavily.com/search"
-        payload = {
-            "api_key": tavily_key,
-            "query": query,
-            "search_depth": "basic",
-            "max_results": 5
-        }
         try:
-            res = requests.post(url, json=payload, timeout=5)
+            url = "https://api.tavily.com/search"
+            payload = {"api_key": tavily_key, "query": query, "search_depth": "basic", "max_results": 5}
+            res = requests.post(url, json=payload, timeout=3)
             if res.status_code == 200:
                 data = res.json().get("results", [])
                 for r in data:
-                    risultati.append({
-                        "title": r.get("title"),
-                        "url": r.get("url"),
-                        "content": r.get("content")
-                    })
+                    risultati.append({"title": r.get("title"), "url": r.get("url"), "content": r.get("content")})
                 if risultati:
                     return risultati, "Tavily API"
         except Exception:
             pass
 
-    # Tentativo 2: DuckDuckGo (Gratuito e nativo)
+    # 2. Fallback rapido su DuckDuckGo HTML (senza librerie esterne che bloccano il thread)
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=6))
-            for r in results:
-                risultati.append({
-                    "title": r.get("title"),
-                    "url": r.get("href"),
-                    "content": r.get("body")
-                })
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        query_encoded = urllib.parse.quote(query)
+        url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
+        res = requests.post(url, headers=headers, data={'q': query}, timeout=3)
+        
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for r in soup.select(".result")[:6]:
+                title_elem = r.select_one(".result__title a")
+                snippet_elem = r.select_one(".result__snippet")
+                if title_elem:
+                    risultati.append({
+                        "title": title_elem.get_text(strip=True),
+                        "url": title_elem.get("href"),
+                        "content": snippet_elem.get_text(strip=True) if snippet_elem else ""
+                    })
         if risultati:
-            return risultati, "DuckDuckGo (Free Engine)"
-    except Exception as e:
-        st.warning(f"Errore ricerca DuckDuckGo: {e}")
+            return risultati, "DuckDuckGo HTML"
+    except Exception:
+        pass
 
     return [], "Nessuno"
 
 def elabora_risultati(prompt_sistema, dati_web, api_key):
-    """Generazione della tabella e analisi delle offerte con Gemini"""
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=MODELLO_IA,
@@ -149,7 +145,7 @@ if tipo:
     else:
         with st.status("🚀 Ricerca ed elaborazione in corso...", expanded=True) as status:
             
-            st.write("🔍 Scansione del web multi-motore...")
+            st.write("🔍 Scansione rapida del web...")
             
             if tipo == "nuovo":
                 query_web = f"prezzo acquista {prodotto_base} amazon mediaworld unieuro euronics"
@@ -162,7 +158,7 @@ if tipo:
             else:
                 if modo_usato == "Ritiro a mano (Zona)":
                     if not zona:
-                        status.update(label="⚠️ Errore: Inserisci la tua zona per il ritiro a mano.", state="error")
+                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
                         st.stop()
                     query_web = f"site:subito.it OR site:ebay.it {prodotto_base} {zona}"
                     prompt_ia = (
@@ -180,10 +176,10 @@ if tipo:
                         "Rispondi in italiano."
                     )
 
-            risultati_web, motore_usato = cerca_sul_web_ibrida(tavily_api_key, query_web)
+            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
             
             if not risultati_web:
-                status.update(label="❌ Nessun risultato trovato sul web.", state="error")
+                status.update(label="❌ Nessun risultato trovato o timeout superato.", state="error")
                 st.warning("Nessun dato trovato. Prova con termini più semplici.")
             else:
                 st.write(f"🤖 Sintesi dati tramite {motore_usato} e Gemini...")
