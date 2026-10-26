@@ -54,11 +54,11 @@ def cerca_sul_web(_api_key, query):
         return []
     return []
 
-# Funzione per generare la risposta con Groq (Modello aggiornato llama-3.3-70b-versatile)
+# Funzione per generare la risposta con Groq (Modello universale standard llama-3.1-8b-instant)
 def elabora_con_groq(prompt_sistema, dati_web, api_key):
     client = Groq(api_key=api_key)
     completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[
             {"role": "system", "content": prompt_sistema},
             {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
@@ -156,7 +156,7 @@ if tipo:
                 status.update(label="❌ Nessun risultato trovato dal motore di ricerca.", state="error")
                 st.warning("Nessun dato trovato. Riprova con termini più semplici.")
             else:
-                st.write("⚡ Trovati i dati! Generazione tabella con Groq Llama...")
+                st.write("⚡ Trovati i dati! Generazione tabella con Groq...")
                 testo_risultati = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati])
                 
                 try:
