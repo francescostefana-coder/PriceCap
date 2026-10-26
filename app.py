@@ -19,8 +19,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ TrovaPrezzi & Usato (Solo Italia / UE)")
-st.markdown("<p style='color: #718096;'>Ricerca prodotti con prezzi espliciti e negozi con spedizione in Italia.</p>", unsafe_allow_html=True)
+st.title("⚡ TrovaPrezzi & Usato (Filtrato & Pertinente)")
+st.markdown("<p style='color: #718096;'>Filtro anti-spazzatura per risultati pertinenti e prezzi reali in Italia.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
@@ -28,6 +28,12 @@ gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
 MODELLO_IA = 'gemini-1.5-flash'
+
+# --- PAROLE CHIAVE DA ESCLUDERE SEMPRE ---
+BLACKLIST_TERMINI = [
+    "recensione", "come scaricare", "come fare", "guida", "tutorial", 
+    "trovaprezzi.it/offerte", "forum", "vs", "confronto", "scheda tecnica"
+]
 
 # --- FUNZIONI CORE ---
 
@@ -38,6 +44,25 @@ def estrai_prezzo_da_testo(testo):
         p = match.group(1) or match.group(2)
         return f"{p} €"
     return "Vedi link"
+
+def e_risultato_pertinente(titolo, snippet, prodotto_cercato):
+    """Verifica che il risultato parli davvero del prodotto inserito e non sia un blog/guida"""
+    testo_totale = f"{titolo} {snippet}".lower()
+    
+    # 1. Controlla Blacklist
+    for bad_word in BLACKLIST_TERMINI:
+        if bad_word in testo_totale:
+            return False
+            
+    # 2. Controlla che le parole chiave principali del prodotto siano presenti
+    parole_prodotto = [p.lower() for p in prodotto_cercato.split() if len(p) > 2]
+    matches = sum(1 for p in parole_prodotto if p in testo_totale)
+    
+    # Deve contenere almeno la metà delle parole chiave del prodotto
+    if parole_prodotto and (matches / len(parole_prodotto)) < 0.5:
+        return False
+        
+    return True
 
 def identifica_prodotto_da_foto(image_file, api_key):
     try:
@@ -54,7 +79,6 @@ def identifica_prodotto_da_foto(image_file, api_key):
 def cerca_sul_web_sicura(tavily_key, query):
     risultati = []
     
-    # 1. Tentativo Tavily con parametri geografici
     if tavily_key:
         try:
             url = "https://api.tavily.com/search"
@@ -62,7 +86,7 @@ def cerca_sul_web_sicura(tavily_key, query):
                 "api_key": tavily_key,
                 "query": query,
                 "search_depth": "basic",
-                "max_results": 7,
+                "max_results": 10,
                 "include_answer": False
             }
             res = requests.post(url, json=payload, timeout=4)
@@ -79,7 +103,6 @@ def cerca_sul_web_sicura(tavily_key, query):
         except Exception:
             pass
 
-    # 2. Fallback su DuckDuckGo HTML
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         query_encoded = urllib.parse.quote(query)
@@ -88,7 +111,7 @@ def cerca_sul_web_sicura(tavily_key, query):
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
-            for r in soup.select(".result")[:7]:
+            for r in soup.select(".result")[:10]:
                 title_elem = r.select_one(".result__title a")
                 snippet_elem = r.select_one(".result__snippet")
                 if title_elem:
@@ -104,10 +127,9 @@ def cerca_sul_web_sicura(tavily_key, query):
 
     return [], "Nessuno"
 
-def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, api_key):
+def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercato, api_key):
     """
-    Tenta la sintesi via Gemini filtrando per disponibilità in Italia.
-    Se in fallback, costruisce la tabella estraendo i prezzi via Regex.
+    Tenta la sintesi via Gemini. Se in Fallback, applica il filtro di pertinenza rigido.
     """
     if api_key:
         try:
@@ -121,15 +143,23 @@ def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, api_key):
         except Exception:
             pass
 
-    # --- FALLBACK DIRETTO ---
+    # --- FALLBACK DIRETTO CON FILTRO DI PERTINANZA ---
     tabella_diretta = "| Prodotto / Titolo | Prezzo (€) | Link Offerta |\n| :--- | :--- | :--- |\n"
-    for r in risultati_web:
-        titolo_pulito = r['title'].replace("|", "-")[:65]
-        testo_completo = f"{r['title']} {r['content']}"
-        prezzo = estrai_prezzo_da_testo(testo_completo)
-        tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
+    conteggio_validi = 0
     
-    return tabella_diretta, "Visualizzazione Diretta (Fallback anti-503)"
+    for r in risultati_web:
+        # Filtriamo i risultati non pertinenti
+        if e_risultato_pertinente(r['title'], r['content'], prodotto_cercato):
+            titolo_pulito = r['title'].replace("|", "-")[:65]
+            testo_completo = f"{r['title']} {r['content']}"
+            prezzo = estrai_prezzo_da_testo(testo_completo)
+            tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
+            conteggio_validi += 1
+
+    if conteggio_validi == 0:
+        return "⚠️ Nessun annuncio o offerta direttamente pertinente trovato. Prova a raffinare il nome del prodotto.", "Visualizzazione Diretta"
+
+    return tabella_diretta, "Visualizzazione Diretta Filtrata"
 
 # --- INTERFACCIA UTENTE ---
 st.markdown("### 1. Inserisci o fotografa il prodotto")
@@ -179,53 +209,35 @@ if tipo:
     if not prodotto_base:
         st.warning("⚠️ Inserisci prima il nome di un prodotto o carica una foto.")
     else:
-        with st.status("🚀 Ricerca offerte in Italia/UE in corso...", expanded=True) as status:
+        with st.status("🚀 Ricerca offerte in corso...", expanded=True) as status:
             
-            st.write("🔍 Scansione store e siti italiani in tempo reale...")
+            st.write("🔍 Scansione store e mercatini...")
             
             if tipo == "nuovo":
-                query_web = f"prezzo acquista {prodotto_base} italia euro (site:.it OR amazon.it OR mediaworld.it OR unieuro.it OR euronics.it)"
+                query_web = f'"{prodotto_base}" prezzo acquista (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trovaprezzi.it)'
                 prompt_ia = f"""Sei un assistente per lo shopping in Italia per '{prodotto_base}'.
 Analizza i risultati web e crea una TABELLA Markdown con colonne esatte:
 1. **Store / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai al Sito](URL))
 
 REGOLE RIGIDE:
-- Accetta SOLO store italiani o europei con spedizione standard in Italia. ESCLUDI siti USA, in dollari ($) o con dazi doganali.
+- Filtra ed ESCLUDI del tutto articoli non pertinenti, recensioni, o guide.
+- Mostra SOLO inserzioni di vendita reali per '{prodotto_base}'.
 - Inserisci SEMPRE il prezzo numerico in Euro (€) nella colonna Prezzo.
-- Seleziona SOLO offerte attive. Ordina dal prezzo più basso. Rispondi in italiano."""
+- Ordina dal prezzo più basso. Rispondi in italiano."""
             else:
                 if modo_usato == "Ritiro a mano (Zona)":
                     if not zona:
                         status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
                         st.stop()
-                    query_web = f"site:subito.it OR site:ebay.it {prodotto_base} {zona}"
+                    query_web = f'"{prodotto_base}" {zona} (site:subito.it OR site:ebay.it)'
                     prompt_ia = f"""Sei un assistente per l'usato in Italia. Cerca annunci per '{prodotto_base}' con ritiro a mano a {zona}.
 Crea una TABELLA Markdown con colonne esatte:
 1. **Piattaforma / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai all'Annuncio](URL))
 
 REGOLE RIGIDE:
-- Mostra solo annunci rilevanti in Italia con prezzo in Euro (€).
-- Escludi annunci palesemente vecchi o scaduti. Rispondi in italiano."""
+- Mostra SOLO annunci pertinenti a '{prodotto_base}' a {zona}.
+- Escludi guide, notizie o prodotti diversi. Rispondi in italiano."""
                 else:
-                    query_web = f"(site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it) {prodotto_base} italia spedizione"
-                    prompt_ia = f"""Sei un assistente per l'usato in Italia. Cerca annunci per '{prodotto_base}' con spedizione in Italia.
-Crea una TABELLA Markdown con colonne esatte:
-1. **Piattaforma / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai all'Annuncio](URL))
-
-REGOLE RIGIDE:
-- Accetta solo annunci da piattaforme operanti in Italia (Subito, Vinted, Wallapop, eBay.it).
-- Estrai ed esplicita SEMPRE il prezzo in Euro (€) nell'apposita colonna. Rispondi in italiano."""
-
-            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
-            
-            if not risultati_web:
-                status.update(label="❌ Nessun risultato trovato in Italia.", state="error")
-                st.warning("Nessun dato trovato per l'Italia. Prova con termini di ricerca più generici.")
-            else:
-                st.write(f"🤖 Estrazione prezzi e verifica territorialità ({motore_usato})...")
-                
-                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(prompt_ia, risultati_web, gemini_api_key)
-                
-                status.update(label=f"✅ Completato ({modalita_output})!", state="complete")
-                st.markdown("### 📊 Risultati della Ricerca (Italia / UE)")
-                st.markdown(risultato_finale)
+                    query_web = f'"{prodotto_base}" (site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it)'
+                    prompt_ia = f"""Sei un assistente per l'usato in Italia. Cerca annunci per '{prodotto_base}'.
+Crea
