@@ -215,9 +215,42 @@ if tipo:
             if tipo == "nuovo":
                 query_web = f'"{prodotto_base}" prezzo acquista (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trovaprezzi.it)'
                 prompt_ia = (
-                    "Sei un assistente per lo shopping in Italia per '" + prodotto_base + "'.\n"
-                    "Analizza i risultati web e crea una TABELLA Markdown con colonne esatte:\n"
-                    "1. Store / Titolo | 2. Prezzo (€) | 3. Link ([Vai al Sito](URL))\n\n"
-                    "REGOLE RIGIDE:\n"
-                    "- Filtra ed ESCLUDI del tutto articoli non pertinenti, recensioni, o guide.\n"
-                    "- Mostra SOLO inserzioni di vendita reali per '" + prodotto_
+                    "Sei un assistente per lo shopping in Italia per " + prodotto_base + ". "
+                    "Crea una TABELLA Markdown con colonne: Store / Titolo, Prezzo (€), Link ([Vai al Sito](URL)). "
+                    "Filtra ed escludi articoli non pertinenti o guide. Mostra solo inserzioni di vendita reali, "
+                    "inserisci sempre il prezzo in Euro e ordina dal prezzo più basso. Rispondi in italiano."
+                )
+            else:
+                if modo_usato == "Ritiro a mano (Zona)":
+                    if not zona:
+                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
+                        st.stop()
+                    query_web = f'"{prodotto_base}" {zona} (site:subito.it OR site:ebay.it)'
+                    prompt_ia = (
+                        "Cerca annunci per " + prodotto_base + " con ritiro a mano a " + zona + ". "
+                        "Crea una TABELLA Markdown con colonne: Piattaforma / Titolo, Prezzo (€), Link. "
+                        "Mostra solo annunci pertinenti ed escludi guide o notizie. Rispondi in italiano."
+                    )
+                else:
+                    query_web = f'"{prodotto_base}" (site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it)'
+                    prompt_ia = (
+                        "Cerca annunci per " + prodotto_base + ". "
+                        "Crea una TABELLA Markdown con colonne: Piattaforma / Titolo, Prezzo (€), Link. "
+                        "Mostra solo annunci di vendita reali ed escludi blog o recensioni. Rispondi in italiano."
+                    )
+
+            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
+            
+            if not risultati_web:
+                status.update(label="❌ Nessun risultato trovato in Italia.", state="error")
+                st.warning("Nessun dato trovato per l'Italia. Prova con termini di ricerca più generici.")
+            else:
+                st.write(f"🤖 Filtraggio pertinenza ed estrazione prezzi ({motore_usato})...")
+                
+                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(
+                    prompt_ia, risultati_web, prodotto_base, gemini_api_key
+                )
+                
+                status.update(label=f"✅ Completato ({modalita_output})!", state="complete")
+                st.markdown("### 📊 Risultati della Ricerca")
+                st.markdown(risultato_finale)
