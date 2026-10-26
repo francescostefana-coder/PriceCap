@@ -18,7 +18,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ TrovaPrezzi & Usato (Istantaneo)")
-st.markdown("<p style='color: #718096;'>Ricerca alimentata da Groq Llama 3.3 per la massima velocità.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #718096;'>Ricerca alimentata da Groq Llama per la massima velocità.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
@@ -54,11 +54,11 @@ def cerca_sul_web(_api_key, query):
         return []
     return []
 
-# Funzione per generare la risposta con Groq (Ultra-veloce)
+# Funzione per generare la risposta con Groq (Modello aggiornato llama-3.1-70b-versatile)
 def elabora_con_groq(prompt_sistema, dati_web, api_key):
     client = Groq(api_key=api_key)
     completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-70b-versatile",
         messages=[
             {"role": "system", "content": prompt_sistema},
             {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
@@ -156,7 +156,7 @@ if tipo:
                 status.update(label="❌ Nessun risultato trovato dal motore di ricerca.", state="error")
                 st.warning("Nessun dato trovato. Riprova con termini più semplici.")
             else:
-                st.write("⚡ Trovati i dati! Generazione tabella con Groq Llama 3.3...")
+                st.write("⚡ Trovati i dati! Generazione tabella con Groq Llama...")
                 testo_risultati = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati])
                 
                 try:
