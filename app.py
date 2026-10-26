@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import time
 from PIL import Image
 from google import genai
 from groq import Groq
@@ -18,7 +19,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ TrovaPrezzi & Usato Fulmineo")
-st.markdown("<p style='color: #718096;'>Architettura resiliente con rilevamento dinamico dei modelli.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #718096;'>Architettura resiliente con retries automatici anti-503.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
@@ -26,7 +27,6 @@ groq_api_key = st.secrets.get("GROQ_API_KEY", "") or st.sidebar.text_input("Groq
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 
-# Modello Gemini ufficiale e aggiornato
 MODELLO_GEMINI = 'gemini-3.8-flash'
 
 # --- CORE FUNCTIONS ---
@@ -57,7 +57,7 @@ def cerca_sul_web(_api_key, query):
         return []
     return []
 
-def genera_con_groq_dinamico(prompt_sistema, dati_web, api_key):
+def genera_con_groq_dinamico(prompt_sistema, dati_web, api_key, max_retries=3):
     client = Groq(api_key=api_key)
     modelli_disponibili = client.models.list()
     priorita = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "llama3-8b-8192"]
@@ -74,25 +74,42 @@ def genera_con_groq_dinamico(prompt_sistema, dati_web, api_key):
         
     if not modello_scelto:
         raise Exception("Nessun modello attivo restituito dall'API Groq.")
-        
-    completion = client.chat.completions.create(
-        model=modello_scelto,
-        messages=[
-            {"role": "system", "content": prompt_sistema},
-            {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
-        ],
-        temperature=0.2,
-        max_tokens=512,  # Ottimizzato per rispettare i limiti di contesto di tutti i modelli Groq
-    )
-    return completion.choices[0].message.content, modello_scelto
 
-def genera_con_gemini_fallback(prompt_sistema, dati_web, api_key):
+    # Retry loop con backoff per gestire sovraccarichi temporanei (503/429)
+    for attempt in range(max_retries):
+        try:
+            completion = client.chat.completions.create(
+                model=modello_scelto,
+                messages=[
+                    {"role": "system", "content": prompt_sistema},
+                    {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
+                ],
+                temperature=0.2,
+                max_tokens=1024,
+            )
+            return completion.choices[0].message.content, modello_scelto
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+            else:
+                raise e
+
+def genera_con_gemini_fallback(prompt_sistema, dati_web, api_key, max_retries=3):
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=MODELLO_GEMINI,
-        contents=f"{prompt_sistema}\n\nDati ricerca web:\n{dati_web}"
-    )
-    return response.text
+    
+    # Retry loop con backoff per Gemini
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=MODELLO_GEMINI,
+                contents=f"{prompt_sistema}\n\nDati ricerca web:\n{dati_web}"
+            )
+            return response.text
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+            else:
+                raise e
 
 # --- INPUT UI ---
 st.markdown("### 1. Inserisci o fotografa il prodotto")
@@ -188,24 +205,24 @@ if tipo:
                 risposta_finale = None
                 engine_usato = ""
 
-                # Tentativo 1: Groq con rilevamento dinamico dei modelli e max_tokens sicuro
+                # Provider 1: Groq (con retries automatici)
                 if groq_api_key:
                     try:
                         risposta_finale, modello = genera_con_groq_dinamico(prompt_ia, testo_risultati, groq_api_key)
                         engine_usato = f"Groq ({modello})"
                     except Exception as e:
-                        st.write(f"⚠️ Groq non disponibile ({e}). Passaggio al fallback Gemini...")
+                        st.write(f"⚠️ Groq temporaneamente occupato. Tentativo con fallback Gemini...")
 
-                # Tentativo 2: Fallback su Gemini aggiornato al modello ufficiale
+                # Provider 2: Gemini (con retries automatici)
                 if not risposta_finale and gemini_api_key:
                     try:
                         risposta_finale = genera_con_gemini_fallback(prompt_ia, testo_risultati, gemini_api_key)
                         engine_usato = "Gemini 3.8 Flash (Fallback)"
                     except Exception as e:
                         status.update(label="❌ Errore generale sui provider IA.", state="error")
-                        st.error(f"Impossibile generare la risposta: {e}")
+                        st.error(f"I server di generazione sono momentaneamente saturi. Riprova tra qualche secondo: {e}")
 
-                # Step 3: Render Risultati
+                # Render Risultati
                 if risposta_finale:
                     status.update(label=f"✅ Completato con successo via {engine_usato}!", state="complete")
                     st.markdown("### 📊 Risultati della Ricerca")
