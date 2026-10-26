@@ -1,6 +1,5 @@
 streamlit
-google-genai
 requests
-Pillow
-groq
-beautifulsoup4
+google-genai
+pillow
+duckduckgo_search
