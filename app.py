@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 from PIL import Image
@@ -26,17 +27,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Titolo
-st.title("🛒 TrovaPrezzi & Usato AI")
-st.markdown("<p style='color: #718096;'>Confronta i prezzi del nuovo o cerca occasioni nell'usato (a mano o con spedizione).</p>", unsafe_allow_html=True)
+st.title("🛒 TrovaPrezzi & Usato AI (Ultra Veloce)")
+st.markdown("<p style='color: #718096;'>Confronta i prezzi in pochi secondi.</p>", unsafe_allow_html=True)
 
-# Sidebar API Keys
+# --- CONFIGURAZIONE API (Legge prima dai Secrets di Streamlit, altrimenti usa la sidebar) ---
 st.sidebar.header("🔑 Configurazione")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
-tavily_api_key = st.sidebar.text_input("Tavily API Key", type="password")
+gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
+tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 st.sidebar.markdown("---")
-st.sidebar.info("Le chiavi non vengono salvate e restano protette.")
+st.sidebar.info("Le chiavi sono configurate in modo sicuro.")
 
-# Funzione per identificare il prodotto dalla foto con Gemini
+# Funzione per identificare il prodotto dalla foto con Gemini (Modello rapido 3.8-flash)
 def identifica_prodotto_da_foto(image_file, api_key):
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
@@ -46,15 +47,16 @@ def identifica_prodotto_da_foto(image_file, api_key):
     )
     return response.text.strip()
 
-# Funzione per cercare sul web tramite Tavily
-def cerca_sul_web(query, api_key):
+# Funzione di ricerca web ottimizzata e memorizzata in cache per velocità estrema
+@st.cache_data(ttl=3600)
+def cerca_sul_web(_api_key, query):
     url = "https://api.tavily.com/search"
     payload = {
-        "api_key": api_key,
+        "api_key": _api_key,
         "query": query,
         "search_depth": "basic",
         "include_answer": False,
-        "max_results": 8
+        "max_results": 4  # Ridotto a 4 per velocizzare la risposta
     }
     response = requests.post(url, json=payload)
     if response.status_code == 200:
@@ -68,14 +70,14 @@ input_tab1, input_tab2 = st.tabs(["✍️ Scrivi Nome", "📷 Scatta / Carica Fo
 prodotto_base = ""
 
 with input_tab1:
-    testo_input = st.text_input("Nome del prodotto:", placeholder="Es. iPhone 15, Dyson V15, LEGO...")
+    testo_input = st.text_input("Nome del prodotto:", placeholder="Es. iPhone 15, Dyson V15...")
     if testo_input:
         prodotto_base = testo_input
 
 with input_tab2:
     foto_caricata = st.file_uploader("Carica una foto dell'oggetto", type=["jpg", "jpeg", "png"])
     if foto_caricata and gemini_api_key:
-        with st.spinner("Analisi foto in corso con Gemini..."):
+        with st.spinner("Analisi foto rapida in corso..."):
             try:
                 prodotto_base = identifica_prodotto_da_foto(foto_caricata, gemini_api_key)
                 st.success(f"Prodotto rilevato: **{prodotto_base}**")
@@ -110,16 +112,16 @@ with categoria_tab2:
 # --- ESECUZIONE DELLA RICERCA E RISULTATI ---
 if tipo_ricerca:
     if not gemini_api_key or not tavily_api_key:
-        st.error("⚠️ Inserisci sia la Gemini API Key che la Tavily API Key nella barra laterale a sinistra.")
+        st.error("⚠️ Inserisci sia la Gemini API Key che la Tavily API Key.")
     elif not prodotto_base:
         st.warning("⚠️ Inserisci prima il nome del prodotto o carica una foto.")
     else:
-        with st.spinner("Ricerca sul web in corso..."):
+        with st.spinner("⚡ Ricerca rapida in corso..."):
             
             if tipo_ricerca == "nuovo":
                 query_web = f"acquista prezzo {prodotto_base} amazon mediaworld unieuro euronics"
                 prompt_ia = (
-                    "Sei un assistente per lo shopping online. Analizza i dati web ricevuti. "
+                    "Sei un assistente per lo shopping online rapido e sintetico. Analizza i dati web ricevuti. "
                     "Considera SOLO negozi blasonati e affidabili (Amazon, MediaWorld, Unieuro, ecc.). "
                     "Crea una TABELLA Markdown ordinata dal prezzo più basso con colonne:\n"
                     "1. **Store** | 2. **Prezzo** | 3. **Affidabilità** (es. ⭐⭐⭐⭐⭐) | 4. **Link** ([Vai al Sito](URL))."
@@ -143,7 +145,7 @@ if tipo_ricerca:
                         "1. **Piattaforma** (Subito/Vinted/Wallapop) | 2. **Prezzo** | 3. **Protezione / Spedizione** | 4. **Link Annuncio** ([Vai al Link](URL))."
                     )
 
-            risultati = cerca_sul_web(query_web, tavily_api_key)
+            risultati = cerca_sul_web(tavily_api_key, query_web)
 
             if not risultati:
                 st.error("Nessun risultato trovato.")
