@@ -4,10 +4,10 @@ from PIL import Image
 from google import genai
 import urllib.parse
 from bs4 import BeautifulSoup
-import pandas as pd
+import re
 
 # Configurazione pagina
-st.set_page_config(page_title="TrovaPrezzi Resiliente", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="TrovaPrezzi Italia", page_icon="⚡", layout="centered")
 
 # --- GRAFICA MINIMALE ---
 st.markdown("""
@@ -19,18 +19,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ TrovaPrezzi & Usato (Anti-Crash)")
-st.markdown("<p style='color: #718096;'>Sistema ibrido con visualizzazione diretta dei dati in caso di sovraccarico IA.</p>", unsafe_allow_html=True)
+st.title("⚡ TrovaPrezzi & Usato (Solo Italia / UE)")
+st.markdown("<p style='color: #718096;'>Ricerca prodotti con prezzi espliciti e negozi con spedizione in Italia.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Modello standard stabile
 MODELLO_IA = 'gemini-1.5-flash'
 
 # --- FUNZIONI CORE ---
+
+def estrai_prezzo_da_testo(testo):
+    """Cerca pattern di prezzo in Euro all'interno del testo estratto"""
+    match = re.search(r'(\d+[\.,]?\d*)\s*€|€\s*(\d+[\.,]?\d*)', testo)
+    if match:
+        p = match.group(1) or match.group(2)
+        return f"{p} €"
+    return "Vedi link"
 
 def identifica_prodotto_da_foto(image_file, api_key):
     try:
@@ -47,22 +54,32 @@ def identifica_prodotto_da_foto(image_file, api_key):
 def cerca_sul_web_sicura(tavily_key, query):
     risultati = []
     
-    # 1. Tentativo Tavily
+    # 1. Tentativo Tavily con parametri geografici
     if tavily_key:
         try:
             url = "https://api.tavily.com/search"
-            payload = {"api_key": tavily_key, "query": query, "search_depth": "basic", "max_results": 6}
+            payload = {
+                "api_key": tavily_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 7,
+                "include_answer": False
+            }
             res = requests.post(url, json=payload, timeout=4)
             if res.status_code == 200:
                 data = res.json().get("results", [])
                 for r in data:
-                    risultati.append({"title": r.get("title"), "url": r.get("url"), "content": r.get("content")})
+                    risultati.append({
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "content": r.get("content", "")
+                    })
                 if risultati:
                     return risultati, "Tavily API"
         except Exception:
             pass
 
-    # 2. Fallback su DuckDuckGo HTML (Gratuito e senza chiavi)
+    # 2. Fallback su DuckDuckGo HTML
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         query_encoded = urllib.parse.quote(query)
@@ -71,7 +88,7 @@ def cerca_sul_web_sicura(tavily_key, query):
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
-            for r in soup.select(".result")[:6]:
+            for r in soup.select(".result")[:7]:
                 title_elem = r.select_one(".result__title a")
                 snippet_elem = r.select_one(".result__snippet")
                 if title_elem:
@@ -89,8 +106,8 @@ def cerca_sul_web_sicura(tavily_key, query):
 
 def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, api_key):
     """
-    Tenta di usare Gemini. Se fallisce (503 o errori), restituisce direttamente 
-    i risultati web grezzi in formato tabella Markdown leggibile.
+    Tenta la sintesi via Gemini filtrando per disponibilità in Italia.
+    Se in fallback, costruisce la tabella estraendo i prezzi via Regex.
     """
     if api_key:
         try:
@@ -98,17 +115,19 @@ def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, api_key):
             testo_grezzo = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati_web])
             response = client.models.generate_content(
                 model=MODELLO_IA,
-                contents=f"{prompt_sistema}\n\nDati raccolti dal web:\n{testo_grezzo}"
+                contents=f"{prompt_sistema}\n\nDati dal web:\n{testo_grezzo}"
             )
             return response.text, "Gemini 1.5 Flash (IA)"
         except Exception:
-            pass # Se l'IA fallisce (503), passa silenziosamente al fallback diretto
+            pass
 
-    # --- FALLBACK DIRETTO (Zero dipendenze IA, zero errori 503) ---
-    tabella_diretta = "| Fonte / Risultato | Link Offerta |\n| :--- | :--- |\n"
+    # --- FALLBACK DIRETTO ---
+    tabella_diretta = "| Prodotto / Titolo | Prezzo (€) | Link Offerta |\n| :--- | :--- | :--- |\n"
     for r in risultati_web:
-        titolo_pulito = r['title'].replace("|", "-")[:70]
-        tabella_diretta += f"| **{titolo_pulito}** | [Vai al sito]({r['url']}) |\n"
+        titolo_pulito = r['title'].replace("|", "-")[:65]
+        testo_completo = f"{r['title']} {r['content']}"
+        prezzo = estrai_prezzo_da_testo(testo_completo)
+        tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
     
     return tabella_diretta, "Visualizzazione Diretta (Fallback anti-503)"
 
@@ -160,47 +179,16 @@ if tipo:
     if not prodotto_base:
         st.warning("⚠️ Inserisci prima il nome di un prodotto o carica una foto.")
     else:
-        with st.status("🚀 Esecuzione ricerca in corso...", expanded=True) as status:
+        with st.status("🚀 Ricerca offerte in Italia/UE in corso...", expanded=True) as status:
             
-            st.write("🔍 Scansione del web...")
+            st.write("🔍 Scansione store e siti italiani in tempo reale...")
             
             if tipo == "nuovo":
-                query_web = f"prezzo acquista {prodotto_base} amazon mediaworld unieuro euronics"
+                # Forziamo negozi italiani e valuta in Euro
+                query_web = f"prezzo acquista {prodotto_base} italia euro (site:.it OR amazon.it OR mediaworld.it OR unieuro.it OR euronics.it)"
                 prompt_ia = (
-                    f"Sei un assistente per lo shopping per '{prodotto_base}'. "
-                    "Crea una TABELLA Markdown con colonne: **Store**, **Prezzo**, **Link** ([Vai al Sito](URL)). "
-                    "Rispondi in italiano."
-                )
-            else:
-                if modo_usato == "Ritiro a mano (Zona)":
-                    if not zona:
-                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
-                        st.stop()
-                    query_web = f"site:subito.it OR site:ebay.it {prodotto_base} {zona}"
-                    prompt_ia = (
-                        f"Cerca annunci per '{prodotto_base}' a {zona}. "
-                        "Crea una TABELLA Markdown con colonne: **Piattaforma/Zona**, **Prezzo**, **Link** ([Vai all'Annuncio](URL)). "
-                        "Rispondi in italiano."
-                    )
-                else:
-                    query_web = f"site:subito.it OR site:vinted.it OR site:wallapop.it {prodotto_base} spedizione"
-                    prompt_ia = (
-                        f"Cerca annunci con spedizione per '{prodotto_base}'. "
-                        "Crea una TABELLA Markdown con colonne: **Piattaforma**, **Prezzo**, **Link** ([Vai all'Annuncio](URL)). "
-                        "Rispondi in italiano."
-                    )
-
-            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
-            
-            if not risultati_web:
-                status.update(label="❌ Nessun risultato trovato.", state="error")
-                st.warning("Nessun dato trovato sul web. Prova con termini più semplici.")
-            else:
-                st.write(f"🤖 Elaborazione risultati (Motore web: {motore_usato})...")
-                
-                # Questa funzione prova l'IA, se c'è 503 mostra i link direttamente senza crashare
-                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(prompt_ia, risultati_web, gemini_api_key)
-                
-                status.update(label=f"✅ Completato ({modalita_output})!", state="complete")
-                st.markdown("### 📊 Risultati della Ricerca")
-                st.markdown(risultato_finale)
+                    f"Sei un assistente per lo shopping in Italia per '{prodotto_base}'. "
+                    "Analizza i risultati web e crea una TABELLA Markdown con colonne esatte:\n"
+                    "1. **Store / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai al Sito](URL))\n\n"
+                    "REGOLE RIGIDE:\n"
+                    "- Accetta SOLO store italiani o europei con spedizione standard
