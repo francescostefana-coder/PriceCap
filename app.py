@@ -105,4 +105,162 @@ def cerca_sul_web_sicura(tavily_key, query):
 
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        query_encoded = urllib.parse.quote
+        query_encoded = urllib.parse.quote(query)
+        url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
+        res = requests.post(url, headers=headers, data={'q': query}, timeout=4)
+        
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for r in soup.select(".result")[:10]:
+                title_elem = r.select_one(".result__title a")
+                snippet_elem = r.select_one(".result__snippet")
+                if title_elem:
+                    risultati.append({
+                        "title": title_elem.get_text(strip=True),
+                        "url": title_elem.get("href"),
+                        "content": snippet_elem.get_text(strip=True) if snippet_elem else ""
+                    })
+        if risultati:
+            return risultati, "DuckDuckGo HTML"
+    except Exception:
+        pass
+
+    return [], "Nessuno"
+
+def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercato, api_key):
+    """
+    Tenta la sintesi via Gemini. Se in Fallback, applica il filtro di pertinenza rigido.
+    """
+    if api_key:
+        try:
+            client = genai.Client(api_key=api_key)
+            testo_grezzo = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati_web])
+            response = client.models.generate_content(
+                model=MODELLO_IA,
+                contents=f"{prompt_sistema}\n\nDati dal web:\n{testo_grezzo}"
+            )
+            return response.text, "Gemini 1.5 Flash (IA)"
+        except Exception:
+            pass
+
+    # --- FALLBACK DIRETTO CON FILTRO DI PERTINANZA ---
+    tabella_diretta = "| Prodotto / Titolo | Prezzo (€) | Link Offerta |\n| :--- | :--- | :--- |\n"
+    conteggio_validi = 0
+    
+    for r in risultati_web:
+        if e_risultato_pertinente(r['title'], r['content'], prodotto_cercato):
+            titolo_pulito = r['title'].replace("|", "-")[:65]
+            testo_completo = f"{r['title']} {r['content']}"
+            prezzo = estrai_prezzo_da_testo(testo_completo)
+            tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
+            conteggio_validi += 1
+
+    if conteggio_validi == 0:
+        return "⚠️ Nessun annuncio o offerta direttamente pertinente trovato. Prova a raffinare il nome del prodotto.", "Visualizzazione Diretta"
+
+    return tabella_diretta, "Visualizzazione Diretta Filtrata"
+
+# --- INTERFACCIA UTENTE ---
+st.markdown("### 1. Inserisci o fotografa il prodotto")
+tab1, tab2 = st.tabs(["✍️ Scrivi Nome", "📷 Fotografa"])
+
+prodotto_base = ""
+
+with tab1:
+    prodotto_base = st.text_input("Nome:", placeholder="Es. iPhone 15 Pro, Dyson V15...")
+
+with tab2:
+    foto = st.file_uploader("Carica foto", type=["jpg", "jpeg", "png"])
+    if foto:
+        if not gemini_api_key:
+            st.warning("⚠️ Inserisci la Gemini API Key per analizzare la foto.")
+        else:
+            with st.spinner("Riconoscimento immagine in corso..."):
+                prodotto_base = identifica_prodotto_da_foto(foto, gemini_api_key)
+                if prodotto_base:
+                    st.success(f"Prodotto rilevato: **{prodotto_base}**")
+                else:
+                    st.error("Impossibile leggere la foto automaticamente. Scrivi il nome nel box a fianco.")
+
+st.markdown("---")
+
+# --- SCELTA MODALITÀ ---
+st.markdown("### 2. Scegli dove cercare")
+cat1, cat2 = st.tabs(["🛍️ Nuovo (Negozi)", "🔄 Usato (Privati)"])
+
+tipo = None
+zona = ""
+modo_usato = ""
+
+with cat1:
+    if st.button("Cerca Prezzi Nuovo", type="primary"):
+        tipo = "nuovo"
+
+with cat2:
+    modo_usato = st.radio("Modalità:", ["Ritiro a mano (Zona)", "Con spedizione"])
+    if modo_usato == "Ritiro a mano (Zona)":
+        zona = st.text_input("Città / Zona:", placeholder="Es. Milano, Brescia...")
+    if st.button("Cerca Occasioni Usato", type="primary"):
+        tipo = "usato"
+
+# --- ESECUZIONE ---
+if tipo:
+    if not prodotto_base:
+        st.warning("⚠️ Inserisci prima il nome di un prodotto o carica una foto.")
+    else:
+        with st.status("🚀 Ricerca offerte in corso...", expanded=True) as status:
+            
+            st.write("🔍 Scansione store e mercatini...")
+            
+            if tipo == "nuovo":
+                query_web = f'"{prodotto_base}" prezzo acquista (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trovaprezzi.it)'
+                prompt_ia = (
+                    "Sei un assistente per lo shopping in Italia per '" + prodotto_base + "'.\n"
+                    "Analizza i risultati web e crea una TABELLA Markdown con colonne esatte:\n"
+                    "1. Store / Titolo | 2. Prezzo (€) | 3. Link ([Vai al Sito](URL))\n\n"
+                    "REGOLE RIGIDE:\n"
+                    "- Filtra ed ESCLUDI del tutto articoli non pertinenti, recensioni, o guide.\n"
+                    "- Mostra SOLO inserzioni di vendita reali per '" + prodotto_base + "'.\n"
+                    "- Inserisci SEMPRE il prezzo numerico in Euro (€) nella colonna Prezzo.\n"
+                    "- Ordina dal prezzo più basso. Rispondi in italiano."
+                )
+            else:
+                if modo_usato == "Ritiro a mano (Zona)":
+                    if not zona:
+                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
+                        st.stop()
+                    query_web = f'"{prodotto_base}" {zona} (site:subito.it OR site:ebay.it)'
+                    prompt_ia = (
+                        "Sei un assistente per l'usato in Italia. Cerca annunci per '" + prodotto_base + "' con ritiro a mano a " + zona + ".\n"
+                        "Crea una TABELLA Markdown con colonne esatte:\n"
+                        "1. Piattaforma / Titolo | 2. Prezzo (€) | 3. Link ([Vai all'Annuncio](URL))\n\n"
+                        "REGOLE RIGIDE:\n"
+                        "- Mostra SOLO annunci pertinenti a '" + prodotto_base + "' a " + zona + ".\n"
+                        "- Escludi guide, notizie o prodotti diversi. Rispondi in italiano."
+                    )
+                else:
+                    query_web = f'"{prodotto_base}" (site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it)'
+                    prompt_ia = (
+                        "Sei un assistente per l'usato in Italia. Cerca annunci per '" + prodotto_base + "'.\n"
+                        "Crea una TABELLA Markdown con colonne esatte:\n"
+                        "1. Piattaforma / Titolo | 2. Prezzo (€) | 3. Link ([Vai all'Annuncio](URL))\n\n"
+                        "REGOLE RIGIDE:\n"
+                        "- Mostra SOLO annunci di vendita reali per '" + prodotto_base + "'.\n"
+                        "- Escludi pubblicità, articoli di blog o recensioni. Rispondi in italiano."
+                    )
+
+            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
+            
+            if not risultati_web:
+                status.update(label="❌ Nessun risultato trovato in Italia.", state="error")
+                st.warning("Nessun dato trovato per l'Italia. Prova con termini di ricerca più generici.")
+            else:
+                st.write(f"🤖 Filtraggio pertinenza ed estrazione prezzi ({motore_usato})...")
+                
+                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(
+                    prompt_ia, risultati_web, prodotto_base, gemini_api_key
+                )
+                
+                status.update(label=f"✅ Completato ({modalita_output})!", state="complete")
+                st.markdown("### 📊 Risultati della Ricerca")
+                st.markdown(risultato_finale)
