@@ -26,21 +26,22 @@ groq_api_key = st.secrets.get("GROQ_API_KEY", "") or st.sidebar.text_input("Groq
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 
+# Modello Gemini ufficiale e aggiornato
+MODELLO_GEMINI = 'gemini-3.8-flash'
+
 # --- CORE FUNCTIONS ---
 
 def identifica_prodotto_da_foto(image_file, api_key):
-    """Riconoscimento visivo tramite Gemini Vision SDK ufficiale"""
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model=MODELLO_GEMINI,
         contents=[img, "Scrivi SOLO il nome esatto del prodotto (marca e modello), senza parole aggiuntive."]
     )
     return response.text.strip()
 
 @st.cache_data(ttl=3600)
 def cerca_sul_web(_api_key, query):
-    """Ricerca web tramite Tavily con timeout rigido per evitare blocco UI"""
     url = "https://api.tavily.com/search"
     payload = {
         "api_key": _api_key,
@@ -57,36 +58,23 @@ def cerca_sul_web(_api_key, query):
     return []
 
 def genera_con_groq_dinamico(prompt_sistema, dati_web, api_key):
-    """
-    Rileva i modelli attivi direttamente dall'API di Groq via client.models.list()
-    ed esegue la generazione sul primo modello disponibile.
-    """
     client = Groq(api_key=api_key)
-    
-    # 1. Interrogazione dinamica dell'infrastruttura Groq
     modelli_disponibili = client.models.list()
-    
-    # Priorità preferenziale per i modelli di testo Llama / Mixtral
     priorita = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "llama3-8b-8192"]
-    
-    # Estraiamo gli ID effettivi restituiti dal server
     ids_attivi = [m.id for m in modelli_disponibili.data]
     
-    # Selezioniamo il primo modello compatibile presente sia nelle priorità che sul server
     modello_scelto = None
     for p in priorita:
         if p in ids_attivi:
             modello_scelto = p
             break
             
-    # Se nessuno dei preferiti è trovato, usiamo il primo modello di testo restituito dall'API
     if not modello_scelto and ids_attivi:
         modello_scelto = ids_attivi[0]
         
     if not modello_scelto:
         raise Exception("Nessun modello attivo restituito dall'API Groq.")
         
-    # 2. Esecuzione della chiamata
     completion = client.chat.completions.create(
         model=modello_scelto,
         messages=[
@@ -94,15 +82,14 @@ def genera_con_groq_dinamico(prompt_sistema, dati_web, api_key):
             {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
         ],
         temperature=0.2,
-        max_tokens=1024,
+        max_tokens=512,  # Ottimizzato per rispettare i limiti di contesto di tutti i modelli Groq
     )
     return completion.choices[0].message.content, modello_scelto
 
 def genera_con_gemini_fallback(prompt_sistema, dati_web, api_key):
-    """Fallback automatico su Gemini 2.5 Flash in caso di indisponibilità di Groq"""
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model=MODELLO_GEMINI,
         contents=f"{prompt_sistema}\n\nDati ricerca web:\n{dati_web}"
     )
     return response.text
@@ -159,7 +146,6 @@ if tipo:
     else:
         with st.status("🚀 Esecuzione pipeline di ricerca...", expanded=True) as status:
             
-            # Step 1: Query Builder
             st.write("🔍 [1/2] Ricerca offerte con Tavily...")
             if tipo == "nuovo":
                 query_web = f"prezzo acquista {prodotto_base} amazon mediaworld unieuro euronics"
@@ -190,7 +176,6 @@ if tipo:
                         "Rispondi in italiano."
                     )
 
-            # Step 2: Web Search Execution
             risultati = cerca_sul_web(tavily_api_key, query_web)
             
             if not risultati:
@@ -203,7 +188,7 @@ if tipo:
                 risposta_finale = None
                 engine_usato = ""
 
-                # Tentativo 1: Groq con rilevamento dinamico dei modelli
+                # Tentativo 1: Groq con rilevamento dinamico dei modelli e max_tokens sicuro
                 if groq_api_key:
                     try:
                         risposta_finale, modello = genera_con_groq_dinamico(prompt_ia, testo_risultati, groq_api_key)
@@ -211,11 +196,11 @@ if tipo:
                     except Exception as e:
                         st.write(f"⚠️ Groq non disponibile ({e}). Passaggio al fallback Gemini...")
 
-                # Tentativo 2: Fallback su Gemini
+                # Tentativo 2: Fallback su Gemini aggiornato al modello ufficiale
                 if not risposta_finale and gemini_api_key:
                     try:
                         risposta_finale = genera_con_gemini_fallback(prompt_ia, testo_risultati, gemini_api_key)
-                        engine_usato = "Gemini 2.5 Flash (Fallback)"
+                        engine_usato = "Gemini 3.8 Flash (Fallback)"
                     except Exception as e:
                         status.update(label="❌ Errore generale sui provider IA.", state="error")
                         st.error(f"Impossibile generare la risposta: {e}")
