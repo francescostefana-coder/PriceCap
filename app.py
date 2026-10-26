@@ -17,22 +17,30 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ TrovaPrezzi & Usato Fulmineo")
-st.markdown("<p style='color: #718096;'>Ricerca istantanea protetta da blocchi.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #718096;'>Ricerca istantanea con protezione da sovraccarico.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 
-# Funzione per identificare il prodotto dalla foto
+# Funzione per identificare il prodotto dalla foto con tentativi su più modelli
 def identifica_prodotto_da_foto(image_file, api_key):
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
-    response = client.models.generate_content(
-        model='gemini-3.8-flash',
-        contents=[img, "Scrivi SOLO il nome esatto del prodotto, senza altre parole."]
-    )
-    return response.text.strip()
+    
+    # Lista di modelli da provare in sequenza se uno è sovraccarico
+    modelli = ['gemini-3.8-flash', 'gemini-1.5-flash']
+    for m in modelli:
+        try:
+            response = client.models.generate_content(
+                model=m,
+                contents=[img, "Scrivi SOLO il nome esatto del prodotto, senza altre parole."]
+            )
+            return response.text.strip()
+        except Exception:
+            continue
+    raise Exception("Tutti i modelli Gemini sono temporaneamente sovraccarichi.")
 
 # Funzione di ricerca web con timeout rigoroso (massimo 4 secondi)
 @st.cache_data(ttl=3600)
@@ -92,17 +100,15 @@ with cat2:
     if st.button("Cerca Occasioni Usato", type="primary"):
         tipo = "usato"
 
-# --- ESECUZIONE CON CONTROLLO DI STATO ---
+# --- ESECUZIONE CON GESTIONE DELL'ERRORE 503 ---
 if tipo:
     if not gemini_api_key or not tavily_api_key:
         st.error("⚠️ Inserisci le chiavi API nei Secrets o nella barra laterale.")
     elif not prodotto_base:
         st.warning("⚠️ Inserisci un prodotto o carica una foto.")
     else:
-        # Usiamo un blocco di stato visivo per vedere esattamente a che punto è
         with st.status("🚀 Elaborazione in corso...", expanded=True) as status:
             
-            # PASSO 1: Ricerca Web
             st.write("🔍 Connessione a Tavily per la ricerca web...")
             if tipo == "nuovo":
                 query_web = f"prezzo {prodotto_base} amazon mediaworld unieuro"
@@ -122,24 +128,33 @@ if tipo:
             
             if not risultati:
                 status.update(label="❌ Nessun risultato trovato dal motore di ricerca.", state="error")
-                st.warning("Il motore di ricerca non ha risposto in tempo o non ha trovato nulla. Riprova con un nome più semplice.")
+                st.warning("Il motore di ricerca non ha risposto in tempo. Riprova.")
             else:
-                st.write("✨ Trovati risultati web! Elaborazione con l'Intelligenza Artificiale...")
+                st.write("✨ Trovati risultati web! Interrogazione dell'Intelligenza Artificiale...")
                 testo_risultati = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati])
                 
-                # PASSO 2: Chiamata a Gemini
-                try:
-                    client = genai.Client(api_key=gemini_api_key)
-                    response = client.models.generate_content(
-                        model='gemini-3.8-flash',
-                        contents=f"{prompt_ia}\n\nProdotto: {prodotto_base}\n\nDati:\n{testo_risultati}"
-                    )
-                    
+                # Tentativo con modelli multipli in caso di errore 503
+                client = genai.Client(api_key=gemini_api_key)
+                modelli_da_provare = ['gemini-3.8-flash', 'gemini-1.5-flash']
+                risposta_ottenuta = None
+                errore_finale = None
+                
+                for m in modelli_da_provare:
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=f"{prompt_ia}\n\nProdotto: {prodotto_base}\n\nDati:\n{testo_risultati}"
+                        )
+                        risposta_ottenuta = response.text
+                        break # Se riesce, esce dal ciclo
+                    except Exception as e:
+                        errore_finale = e
+                        continue
+                
+                if risposta_ottenuta:
                     status.update(label="✅ Ricerca completata con successo!", state="complete")
                     st.markdown("### 📊 Risultati della Ricerca")
-                    st.markdown(response.text)
-                    
-                except Exception as e:
-                    status.update(label="❌ Errore durante la risposta dell'IA.", state="error")
-                    st.error(f"Dettaglio errore Gemini: {e}")
-
+                    st.markdown(risposta_ottenuta)
+                else:
+                    status.update(label="❌ Server temporaneamente sovraccarichi.", state="error")
+                    st.error(f"I server di Google sono saturi (Errore 503). Riprova tra un minuto. (Dettaglio: {errore_finale})")
