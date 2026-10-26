@@ -41,7 +41,7 @@ def identifica_prodotto_da_foto(image_file, api_key):
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.8-flash',
         contents=[img, "Identifica con precisione questo prodotto (marca, modello esatto). Rispondi SOLO ed esclusivamente con il nome completo del prodotto, senza altre parole."]
     )
     return response.text.strip()
@@ -155,7 +155,7 @@ if tipo_ricerca:
                 
                 try:
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.8-flash',
                         contents=prompt_completo
                     )
                     
