@@ -17,22 +17,30 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ TrovaPrezzi & Usato Fulmineo")
-st.markdown("<p style='color: #718096;'>Ricerca istantanea protetta.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #718096;'>Ricerca istantanea protetta da blocchi.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 
-# Funzione per identificare il prodotto dalla foto (usa l'alias stabile ufficiale)
+# Nomi esatti e ufficiali dei modelli supportati dalla nuova libreria google-genai
+MODELLI_VALIDI = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+
+# Funzione per identificare il prodotto dalla foto
 def identifica_prodotto_da_foto(image_file, api_key):
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
-    response = client.models.generate_content(
-        model='gemini-flash-latest',
-        contents=[img, "Scrivi SOLO il nome esatto del prodotto, senza altre parole."]
-    )
-    return response.text.strip()
+    for model_name in MODELLI_VALIDI:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[img, "Scrivi SOLO il nome esatto del prodotto, senza altre parole."]
+            )
+            return response.text.strip()
+        except Exception:
+            continue
+    raise Exception("Impossibile analizzare l'immagine.")
 
 # Funzione di ricerca web con timeout rigoroso (massimo 4 secondi)
 @st.cache_data(ttl=3600)
@@ -92,7 +100,7 @@ with cat2:
     if st.button("Cerca Occasioni Usato", type="primary"):
         tipo = "usato"
 
-# --- ESECUZIONE ---
+# --- ESECUZIONE CON FALLBACK SUI MODELLI ---
 if tipo:
     if not gemini_api_key or not tavily_api_key:
         st.error("⚠️ Inserisci le chiavi API nei Secrets o nella barra laterale.")
@@ -114,26 +122,39 @@ if tipo:
                     prompt_ia = f"Cerca usato per '{prodotto_base}' a {zona}. Crea una TABELLA Markdown: **Piattaforma/Zona**, **Prezzo**, **Stato**, **Link** ([Vai](URL))."
                 else:
                     query_web = f"site:subito.it OR site:vinted.it OR site:wallapop.it {prodotto_base} spedizione"
-                    prompt_ia = f"Crea una TABELLA Markdown per l'usato con spedizione: **Piattaforma**, **Prezzo**, **Spedizione**, **Link** ([Vai](URL))."
+                    prompt_ia = "Crea una TABELLA Markdown per l'usato con spedizione: **Piattaforma**, **Prezzo**, **Spedizione**, **Link** ([Vai](URL))."
 
             risultati = cerca_sul_web(tavily_api_key, query_web)
             
             if not risultati:
                 status.update(label="❌ Nessun risultato trovato dal motore di ricerca.", state="error")
-                st.warning("Il motore di ricerca non ha risposto in tempo. Riprova.")
+                st.warning("Il motore di ricerca non ha trovato nulla o ha impiegato troppo tempo.")
             else:
                 st.write("✨ Trovati risultati web! Interrogazione dell'IA...")
                 testo_risultati = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati])
                 
-                try:
-                    client = genai.Client(api_key=gemini_api_key)
-                    response = client.models.generate_content(
-                        model='gemini-flash-latest',
-                        contents=f"{prompt_ia}\n\nProdotto: {prodotto_base}\n\nDati:\n{testo_risultati}"
-                    )
+                client = genai.Client(api_key=gemini_api_key)
+                risposta_testo = None
+                ultimo_errore = None
+
+                # Prova i modelli in sequenza finché uno non risponde
+                for model_name in MODELLI_VALIDI:
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=f"{prompt_ia}\n\nProdotto: {prodotto_base}\n\nDati:\n{testo_risultati}"
+                        )
+                        if response and response.text:
+                            risposta_testo = response.text
+                            break
+                    except Exception as e:
+                        ultimo_errore = e
+                        continue
+
+                if risposta_testo:
                     status.update(label="✅ Ricerca completata con successo!", state="complete")
                     st.markdown("### 📊 Risultati della Ricerca")
-                    st.markdown(response.text)
-                except Exception as e:
-                    status.update(label="❌ Errore durante la generazione.", state="error")
-                    st.error(f"Dettaglio: {e}")
+                    st.markdown(risposta_testo)
+                else:
+                    status.update(label="❌ Errore durante l'interrogazione dell'IA.", state="error")
+                    st.error(f"Errore generazione: {ultimo_errore}")
