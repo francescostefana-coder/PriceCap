@@ -1,13 +1,12 @@
-
 import streamlit as st
 import requests
 from PIL import Image
 from google import genai
 
 # Configurazione pagina
-st.set_page_config(page_title="TrovaPrezzi AI Fulmineo", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="TrovaPrezzi AI", page_icon="⚡", layout="centered")
 
-# --- GRAFICA MINIMALE E VELOCE ---
+# --- GRAFICA MINIMALE ---
 st.markdown("""
 <style>
     .stApp { background-color: #F9FAFC; color: #2D3748; font-family: sans-serif; }
@@ -18,14 +17,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ TrovaPrezzi & Usato Fulmineo")
-st.markdown("<p style='color: #718096;'>Ricerca istantanea di prezzi e occasioni.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #718096;'>Ricerca istantanea protetta da blocchi.</p>", unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE API ---
 st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key", type="password")
 
-# Funzione per identificare il prodotto dalla foto (rapida)
+# Funzione per identificare il prodotto dalla foto
 def identifica_prodotto_da_foto(image_file, api_key):
     client = genai.Client(api_key=api_key)
     img = Image.open(image_file)
@@ -35,7 +34,7 @@ def identifica_prodotto_da_foto(image_file, api_key):
     )
     return response.text.strip()
 
-# Funzione di ricerca web con TIMEOUT RIGIDO (massimo 5 secondi per evitare blocchi)
+# Funzione di ricerca web con timeout rigoroso (massimo 4 secondi)
 @st.cache_data(ttl=3600)
 def cerca_sul_web(_api_key, query):
     url = "https://api.tavily.com/search"
@@ -43,10 +42,10 @@ def cerca_sul_web(_api_key, query):
         "api_key": _api_key,
         "query": query,
         "search_depth": "basic",
-        "max_results": 3  # Ridotto a 3 per velocità massima
+        "max_results": 3
     }
     try:
-        response = requests.post(url, json=payload, timeout=5)
+        response = requests.post(url, json=payload, timeout=4)
         if response.status_code == 200:
             return response.json().get("results", [])
     except Exception:
@@ -65,12 +64,12 @@ with tab1:
 with tab2:
     foto = st.file_uploader("Carica foto", type=["jpg", "jpeg", "png"])
     if foto and gemini_api_key:
-        with st.spinner("Riconoscimento..."):
+        with st.spinner("Riconoscimento in corso..."):
             try:
                 prodotto_base = identifica_prodotto_da_foto(foto, gemini_api_key)
                 st.success(f"Rilevato: **{prodotto_base}**")
-            except Exception:
-                st.error("Errore foto.")
+            except Exception as e:
+                st.error(f"Errore foto: {e}")
 
 st.markdown("---")
 
@@ -93,22 +92,25 @@ with cat2:
     if st.button("Cerca Occasioni Usato", type="primary"):
         tipo = "usato"
 
-# --- ESECUZIONE ---
+# --- ESECUZIONE CON CONTROLLO DI STATO ---
 if tipo:
     if not gemini_api_key or not tavily_api_key:
-        st.error("⚠️ Inserisci le chiavi API.")
+        st.error("⚠️ Inserisci le chiavi API nei Secrets o nella barra laterale.")
     elif not prodotto_base:
-        st.warning("⚠️ Inserisci un prodotto o una foto.")
+        st.warning("⚠️ Inserisci un prodotto o carica una foto.")
     else:
-        with st.spinner("⚡ Ricerca lampo in corso..."):
+        # Usiamo un blocco di stato visivo per vedere esattamente a che punto è
+        with st.status("🚀 Elaborazione in corso...", expanded=True) as status:
             
+            # PASSO 1: Ricerca Web
+            st.write("🔍 Connessione a Tavily per la ricerca web...")
             if tipo == "nuovo":
                 query_web = f"prezzo {prodotto_base} amazon mediaworld unieuro"
                 prompt_ia = "Crea una TABELLA Markdown con colonne: **Store**, **Prezzo**, **Affidabilità** (⭐⭐⭐⭐⭐), **Link** ([Vai](URL)). Ordina dal più basso."
             else:
                 if modo_usato == "Ritiro a mano (Zona)":
                     if not zona:
-                        st.error("Inserisci la zona.")
+                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
                         st.stop()
                     query_web = f"site:subito.it {prodotto_base} {zona}"
                     prompt_ia = f"Cerca usato per '{prodotto_base}' a {zona}. Crea una TABELLA Markdown: **Piattaforma/Zona**, **Prezzo**, **Stato**, **Link** ([Vai](URL))."
@@ -117,19 +119,27 @@ if tipo:
                     prompt_ia = "Crea una TABELLA Markdown per l'usato con spedizione: **Piattaforma**, **Prezzo**, **Spedizione**, **Link** ([Vai](URL))."
 
             risultati = cerca_sul_web(tavily_api_key, query_web)
-
+            
             if not risultati:
-                st.warning("Nessun risultato trovato o tempo scaduto. Riprova con un termine più specifico.")
+                status.update(label="❌ Nessun risultato trovato dal motore di ricerca.", state="error")
+                st.warning("Il motore di ricerca non ha risposto in tempo o non ha trovato nulla. Riprova con un nome più semplice.")
             else:
+                st.write("✨ Trovati risultati web! Elaborazione con l'Intelligenza Artificiale...")
                 testo_risultati = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati])
                 
-                client = genai.Client(api_key=gemini_api_key)
+                # PASSO 2: Chiamata a Gemini
                 try:
+                    client = genai.Client(api_key=gemini_api_key)
                     response = client.models.generate_content(
                         model='gemini-3.8-flash',
                         contents=f"{prompt_ia}\n\nProdotto: {prodotto_base}\n\nDati:\n{testo_risultati}"
                     )
-                    st.success("✅ Fatto!")
+                    
+                    status.update(label="✅ Ricerca completata con successo!", state="complete")
+                    st.markdown("### 📊 Risultati della Ricerca")
                     st.markdown(response.text)
+                    
                 except Exception as e:
-                    st.error(f"Errore IA: {e}")
+                    status.update(label="❌ Errore durante la risposta dell'IA.", state="error")
+                    st.error(f"Dettaglio errore Gemini: {e}")
+
