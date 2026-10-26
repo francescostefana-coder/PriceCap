@@ -54,11 +54,11 @@ def cerca_sul_web(_api_key, query):
         return []
     return []
 
-# Funzione per generare la risposta con Groq (Modello aggiornato llama-3.1-70b-versatile)
+# Funzione per generare la risposta con Groq (Modello aggiornato llama-3.3-70b-versatile)
 def elabora_con_groq(prompt_sistema, dati_web, api_key):
     client = Groq(api_key=api_key)
     completion = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": prompt_sistema},
             {"role": "user", "content": f"Dati ricerca web:\n{dati_web}"}
