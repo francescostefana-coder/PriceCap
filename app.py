@@ -1,10 +1,11 @@
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
-import urllib.parse
+from PIL import Image
+from google import genai
+from duckduckgo_search import DDGS
 
 # Configurazione pagina
-st.set_page_config(page_title="TrovaPrezzi Direct", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="TrovaPrezzi Multi-AI & Free", page_icon="⚡", layout="centered")
 
 # --- GRAFICA MINIMALE ---
 st.markdown("""
@@ -16,76 +17,183 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ TrovaPrezzi Direct (Zero AI)")
-st.markdown("<p style='color: #718096;'>Ricerca istantanea tramite web scraping nativo. Nessun blocco, nessun server IA.</p>", unsafe_allow_html=True)
+st.title("⚡ TrovaPrezzi & Usato (Multi-Engine)")
+st.markdown("<p style='color: #718096;'>Ricerca intelligente con fallback automatico su motori gratuiti.</p>", unsafe_allow_html=True)
 
-# User-Agent per simulare un browser reale ed evitare filtri anti-bot basilari
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
-}
+# --- CONFIGURAZIONE API ---
+st.sidebar.header("🔑 Configurazione")
+gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
+tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-def cerca_su_ebay(query):
-    """Estrae i prodotti direttamente dai risultati di ricerca di eBay Italia"""
-    query_encoded = urllib.parse.quote(query)
-    url = f"https://www.ebay.it/sch/i.html?_nkw={query_encoded}&_sop=12" # Ordinati per prezzo più basso
-    
+MODELLO_IA = 'gemini-3.8-flash'
+
+# --- FUNZIONI CORE ---
+
+def identifica_prodotto_da_foto(image_file, api_key):
+    """Analisi visiva dell'immagine con Gemini"""
+    client = genai.Client(api_key=api_key)
+    img = Image.open(image_file)
+    response = client.models.generate_content(
+        model=MODELLO_IA,
+        contents=[img, "Scrivi SOLO il nome esatto del prodotto (marca e modello), senza altre parole."]
+    )
+    return response.text.strip()
+
+def cerca_sul_web_ibrida(tavily_key, query):
+    """
+    Motore di ricerca ibrido:
+    1. Prova Tavily (se configurato)
+    2. Fallback automatico su DuckDuckGo (Gratuito, senza chiavi)
+    """
     risultati = []
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=4)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            items = soup.select(".s-item__info")
-            
-            for item in items[:6]: # Prende i primi 6 risultati rilevanti
-                title_elem = item.select_one(".s-item__title")
-                price_elem = item.select_one(".s-item__price")
-                link_elem = item.select_one(".s-item__link")
-                
-                if title_elem and price_elem and link_elem:
-                    titolo = title_elem.get_text(strip=True)
-                    prezzo = price_elem.get_text(strip=True)
-                    link = link_elem["href"]
-                    
-                    if "Shop on eBay" not in titolo and titolo:
-                        risultati.append({
-                            "titolo": titolo,
-                            "prezzo": prezzo,
-                            "link": link
-                        })
-    except Exception:
-        pass
-        
-    return risultati
+    
+    # Tentativo 1: Tavily API
+    if tavily_key:
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": tavily_key,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": 5
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=5)
+            if res.status_code == 200:
+                data = res.json().get("results", [])
+                for r in data:
+                    risultati.append({
+                        "title": r.get("title"),
+                        "url": r.get("url"),
+                        "content": r.get("content")
+                    })
+                if risultati:
+                    return risultati, "Tavily API"
+        except Exception:
+            pass
 
-# --- INPUT UTENTE ---
-st.markdown("### 1. Inserisci il prodotto da cercare")
-prodotto = st.text_input("Prodotto:", placeholder="Es. AirPods Pro, iPhone 14, Dyson V15...")
+    # Tentativo 2: DuckDuckGo (Gratuito e nativo)
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=6))
+            for r in results:
+                risultati.append({
+                    "title": r.get("title"),
+                    "url": r.get("href"),
+                    "content": r.get("body")
+                })
+        if risultati:
+            return risultati, "DuckDuckGo (Free Engine)"
+    except Exception as e:
+        st.warning(f"Errore ricerca DuckDuckGo: {e}")
+
+    return [], "Nessuno"
+
+def elabora_risultati(prompt_sistema, dati_web, api_key):
+    """Generazione della tabella e analisi delle offerte con Gemini"""
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=MODELLO_IA,
+        contents=f"{prompt_sistema}\n\nDati raccolti dal web:\n{dati_web}"
+    )
+    return response.text
+
+# --- INTERFACCIA UTENTE ---
+st.markdown("### 1. Inserisci o fotografa il prodotto")
+tab1, tab2 = st.tabs(["✍️ Scrivi Nome", "📷 Fotografa"])
+
+prodotto_base = ""
+
+with tab1:
+    prodotto_base = st.text_input("Nome:", placeholder="Es. iPhone 15 Pro, Dyson V15...")
+
+with tab2:
+    foto = st.file_uploader("Carica foto", type=["jpg", "jpeg", "png"])
+    if foto:
+        if not gemini_api_key:
+            st.error("⚠️ Inserisci la Gemini API Key per analizzare la foto.")
+        else:
+            with st.spinner("Riconoscimento immagine in corso..."):
+                try:
+                    prodotto_base = identifica_prodotto_da_foto(foto, gemini_api_key)
+                    st.success(f"Prodotto rilevato: **{prodotto_base}**")
+                except Exception as e:
+                    st.error(f"Errore lettura foto: {e}")
 
 st.markdown("---")
 
-if st.button("Cerca Prezzi Subito", type="primary"):
-    if not prodotto:
-        st.warning("⚠️ Inserisci il nome di un prodotto.")
+# --- SCELTA MODALITÀ ---
+st.markdown("### 2. Scegli dove cercare")
+cat1, cat2 = st.tabs(["🛍️ Nuovo (Negozi)", "🔄 Usato (Privati)"])
+
+tipo = None
+zona = ""
+modo_usato = ""
+
+with cat1:
+    if st.button("Cerca Prezzi Nuovo", type="primary"):
+        tipo = "nuovo"
+
+with cat2:
+    modo_usato = st.radio("Modalità:", ["Ritiro a mano (Zona)", "Con spedizione"])
+    if modo_usato == "Ritiro a mano (Zona)":
+        zona = st.text_input("Città / Zona:", placeholder="Es. Milano, Brescia...")
+    if st.button("Cerca Occasioni Usato", type="primary"):
+        tipo = "usato"
+
+# --- ESECUZIONE ---
+if tipo:
+    if not gemini_api_key:
+        st.error("⚠️ Configura la Gemini API Key nei Secrets o nella barra laterale.")
+    elif not prodotto_base:
+        st.warning("⚠️ Inserisci prima il nome di un prodotto o carica una foto.")
     else:
-        with st.spinner("Ricerca in corso sui canali di vendita..."):
+        with st.status("🚀 Ricerca ed elaborazione in corso...", expanded=True) as status:
             
-            # Esecuzione della ricerca diretta
-            offerte = cerca_su_ebay(prodotto)
+            st.write("🔍 Scansione del web multi-motore...")
             
-            if offerte:
-                st.success(f"Trovate {len(offerte)} offerte in tempo reale!")
-                st.markdown("### 📊 Risultati")
-                
-                # Visualizzazione pulita a schede/righe interattive
-                for off in offerte:
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    with col1:
-                        st.write(f"**{off['titolo']}**")
-                    with col2:
-                        st.markdown(f"### `{off['prezzo']}`")
-                    with col3:
-                        st.markdown(f"[Vai al sito]({off['link']})")
-                    st.markdown("---")
+            if tipo == "nuovo":
+                query_web = f"prezzo acquista {prodotto_base} amazon mediaworld unieuro euronics"
+                prompt_ia = (
+                    f"Sei un assistente per lo shopping online per il prodotto '{prodotto_base}'. "
+                    "Analizza i dati web forniti e crea una TABELLA Markdown ordinata dal prezzo più basso con colonne:\n"
+                    "1. **Store** | 2. **Prezzo** | 3. **Affidabilità** (es. ⭐⭐⭐⭐⭐) | 4. **Link** ([Vai al Sito](URL)).\n"
+                    "Rispondi in italiano."
+                )
             else:
-                st.error("Nessun risultato trovato o blocco temporaneo della risposta. Riprova con un termine più specifico.")
+                if modo_usato == "Ritiro a mano (Zona)":
+                    if not zona:
+                        status.update(label="⚠️ Errore: Inserisci la tua zona per il ritiro a mano.", state="error")
+                        st.stop()
+                    query_web = f"site:subito.it OR site:ebay.it {prodotto_base} {zona}"
+                    prompt_ia = (
+                        f"Sei un assistente per l'usato. Cerca annunci per '{prodotto_base}' con ritiro a mano in zona '{zona}'. "
+                        "Crea una TABELLA Markdown con colonne:\n"
+                        "1. **Piattaforma/Zona** | 2. **Prezzo** | 3. **Stato / Dettagli** | 4. **Link** ([Vai all'Annuncio](URL)).\n"
+                        "Rispondi in italiano."
+                    )
+                else:
+                    query_web = f"site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it {prodotto_base} spedizione"
+                    prompt_ia = (
+                        f"Sei un assistente per l'usato. Cerca annunci per '{prodotto_base}' con spedizione. "
+                        "Crea una TABELLA Markdown con colonne:\n"
+                        "1. **Piattaforma** | 2. **Prezzo** | 3. **Info Spedizione/Stato** | 4. **Link** ([Vai all'Annuncio](URL)).\n"
+                        "Rispondi in italiano."
+                    )
+
+            risultati_web, motore_usato = cerca_sul_web_ibrida(tavily_api_key, query_web)
+            
+            if not risultati_web:
+                status.update(label="❌ Nessun risultato trovato sul web.", state="error")
+                st.warning("Nessun dato trovato. Prova con termini più semplici.")
+            else:
+                st.write(f"🤖 Sintesi dati tramite {motore_usato} e Gemini...")
+                testo_grezzo = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati_web])
+                
+                try:
+                    risposta_ia = elabora_risultati(prompt_ia, testo_grezzo, gemini_api_key)
+                    status.update(label=f"✅ Completato con successo ({motore_usato})!", state="complete")
+                    st.markdown("### 📊 Risultati della Ricerca")
+                    st.markdown(risposta_ia)
+                except Exception as e:
+                    status.update(label="❌ Errore durante l'elaborazione dell'IA.", state="error")
+                    st.error(f"Dettaglio: {e}")
