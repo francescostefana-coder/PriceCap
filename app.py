@@ -184,11 +184,48 @@ if tipo:
             st.write("🔍 Scansione store e siti italiani in tempo reale...")
             
             if tipo == "nuovo":
-                # Forziamo negozi italiani e valuta in Euro
                 query_web = f"prezzo acquista {prodotto_base} italia euro (site:.it OR amazon.it OR mediaworld.it OR unieuro.it OR euronics.it)"
-                prompt_ia = (
-                    f"Sei un assistente per lo shopping in Italia per '{prodotto_base}'. "
-                    "Analizza i risultati web e crea una TABELLA Markdown con colonne esatte:\n"
-                    "1. **Store / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai al Sito](URL))\n\n"
-                    "REGOLE RIGIDE:\n"
-                    "- Accetta SOLO store italiani o europei con spedizione standard
+                prompt_ia = f"""Sei un assistente per lo shopping in Italia per '{prodotto_base}'.
+Analizza i risultati web e crea una TABELLA Markdown con colonne esatte:
+1. **Store / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai al Sito](URL))
+
+REGOLE RIGIDE:
+- Accetta SOLO store italiani o europei con spedizione standard in Italia. ESCLUDI siti USA, in dollari ($) o con dazi doganali.
+- Inserisci SEMPRE il prezzo numerico in Euro (€) nella colonna Prezzo.
+- Seleziona SOLO offerte attive. Ordina dal prezzo più basso. Rispondi in italiano."""
+            else:
+                if modo_usato == "Ritiro a mano (Zona)":
+                    if not zona:
+                        status.update(label="⚠️ Errore: Inserisci la zona per il ritiro a mano.", state="error")
+                        st.stop()
+                    query_web = f"site:subito.it OR site:ebay.it {prodotto_base} {zona}"
+                    prompt_ia = f"""Sei un assistente per l'usato in Italia. Cerca annunci per '{prodotto_base}' con ritiro a mano a {zona}.
+Crea una TABELLA Markdown con colonne esatte:
+1. **Piattaforma / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai all'Annuncio](URL))
+
+REGOLE RIGIDE:
+- Mostra solo annunci rilevanti in Italia con prezzo in Euro (€).
+- Escludi annunci palesemente vecchi o scaduti. Rispondi in italiano."""
+                else:
+                    query_web = f"(site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it) {prodotto_base} italia spedizione"
+                    prompt_ia = f"""Sei un assistente per l'usato in Italia. Cerca annunci per '{prodotto_base}' con spedizione in Italia.
+Crea una TABELLA Markdown con colonne esatte:
+1. **Piattaforma / Titolo** | 2. **Prezzo (€)** | 3. **Link** ([Vai all'Annuncio](URL))
+
+REGOLE RIGIDE:
+- Accetta solo annunci da piattaforme operanti in Italia (Subito, Vinted, Wallapop, eBay.it).
+- Estrai ed esplicita SEMPRE il prezzo in Euro (€) nell'apposita colonna. Rispondi in italiano."""
+
+            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
+            
+            if not risultati_web:
+                status.update(label="❌ Nessun risultato trovato in Italia.", state="error")
+                st.warning("Nessun dato trovato per l'Italia. Prova con termini di ricerca più generici.")
+            else:
+                st.write(f"🤖 Estrazione prezzi e verifica territorialità ({motore_usato})...")
+                
+                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(prompt_ia, risultati_web, gemini_api_key)
+                
+                status.update(label=f"✅ Completato ({modalita_output})!", state="complete")
+                st.markdown("### 📊 Risultati della Ricerca (Italia / UE)")
+                st.markdown(risultato_finale)
