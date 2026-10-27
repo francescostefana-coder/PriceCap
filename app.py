@@ -30,8 +30,7 @@ st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Utilizzo dell'ultimo modello più recente e relativi fallback
-MODELLI_IA = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash']
+MODELLI_IA = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
 
 # --- FUNZIONI DI SUPPORTO E SICUREZZA ---
 
@@ -41,15 +40,9 @@ def pulisci_testo_markdown(testo):
     return testo.replace("|", "-").replace("[", "(").replace("]", ")").replace("\n", " ").strip()
 
 def cerca_sul_web_sicura(tavily_key, query_prodotto):
-    """
-    Cerca escludendo tassativamente Trovaprezzi, Eprice, blog e forum,
-    restringendo la ricerca ai principali store di elettronica in Italia.
-    """
     query_reale = f'"{query_prodotto}" (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trony.it OR site:monclick.it) -site:trovaprezzi.it -site:eprice.it -site:blog.* -site:forum.*'
-    
     risultati = []
     
-    # 1. Tavily API (se configurata)
     if tavily_key:
         try:
             url = "https://api.tavily.com/search"
@@ -74,7 +67,6 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
         except Exception:
             pass
 
-    # 2. DuckDuckGo HTML Fallback con filtri rigidi sugli store
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         query_encoded = urllib.parse.quote(query_reale)
@@ -104,7 +96,6 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
     return [], "Nessuno"
 
 def genera_analisi_completa(prodotto, risultati_web, api_key):
-    """Usa Gemini per elaborare recensione, pro/contro, alternative e top 3 prezzi."""
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
     prompt = (
@@ -129,4 +120,43 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
     
     for modello in MODELLI_IA:
         try:
-            response = client.models.generate_content(model
+            response = client.models.generate_content(model=modello, contents=prompt)
+            if response and response.text:
+                return response.text, f"IA ({modello})"
+        except Exception as e:
+            ultimo_errore = str(e)
+            continue
+            
+    raise Exception(f"Errore Google API: {ultimo_errore}")
+
+# --- INTERFACCIA UTENTE ---
+
+prodotto_input = st.text_input("Cerca un prodotto elettronico:", placeholder="Es. iPhone 15, Sony WH-1000XM5, TV LG OLED...")
+
+col1, col2 = st.columns(2)
+with col1:
+    cerca_btn = st.button("Analizza e Trova Prezzi", type="primary")
+
+if cerca_btn:
+    if not prodotto_input.strip():
+        st.warning("Inserisci il nome di un prodotto elettronico.")
+    elif not gemini_api_key.strip():
+        st.error("Inserisci la tua Gemini API Key nella barra laterale a sinistra.")
+    else:
+        with st.status("Scansione e-commerce italiani autorizzati...", expanded=True) as status:
+            st.write("Filtro anti-aggregatori e blog in corso...")
+            risultati_web, fonte_ricerca = cerca_sul_web_sicura(tavily_api_key, prodotto_input)
+            
+            if not risultati_web:
+                status.update(label="Nessun riscontro trovato.", state="error")
+                st.warning("Prova a specificare meglio il modello esatto.")
+            else:
+                st.write(f"Elaborazione recensione e prezzi ({fonte_ricerca})...")
+                try:
+                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
+                    status.update(label="Analisi completata con successo!", state="complete")
+                    st.markdown("---")
+                    st.markdown(output_finale)
+                except Exception as e:
+                    status.update(label="Errore elaborazione IA", state="error")
+                    st.error(f"{e}")
