@@ -153,4 +153,20 @@ if cerca_btn:
         st.warning("⚠️ Inserisci il nome di un prodotto elettronico.")
     elif not gemini_api_key.strip():
         st.error("⚠️ **Attenzione:** Inserisci la tua **Gemini API Key** nella barra laterale a sinistra per generare la recensione e trovare i prezzi!")
-    else
+    else:
+        with st.status("🔍 Scansione e-commerce italiani autorizzati...", expanded=True) as status:
+            st.write("Filtro rigoroso anti-aggregatori e blog in corso...")
+            risultati_web, fonte_ricerca = cerca_sul_web_sicura(tavily_api_key, prodotto_input)
+            
+            if not risultati_web:
+                status.update(label="❌ Nessun riscontro diretto trovato sugli store.", state="error")
+                st.warning("Prova a specificare meglio il modello esatto del prodotto (es. marca + modello completo).")
+            else:
+                st.write(f"🤖 Elaborazione recensione, pro/contro e top prezzi ({fonte_ricerca})...")
+                try:
+                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
+                    status.update(label=f"✅ Analisi completata con successo!", state="complete")
+                    st.markdown("---")
+                    st.markdown(output_finale)
+                except Exception as e:
+                    status.update(label="❌ Errore durante l'elabor
