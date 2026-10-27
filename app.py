@@ -46,6 +46,11 @@ tavily_api_key = get_secret("TAVILY_API_KEY") or st.sidebar.text_input(
 keepa_api_key = get_secret("KEEPA_API_KEY") or st.sidebar.text_input(
     "Keepa API Key (storico prezzi, a pagamento)", type="password"
 )
+modello_scelto = st.sidebar.text_input(
+    "Modello OpenRouter (opzionale)",
+    placeholder="es. nome/modello da openrouter.ai/models",
+    help="Se lo compili viene provato per primo. Un modello a pagamento economico evita i blocchi 429 dei gratuiti.",
+).strip()
 
 # NB: 'openrouter/auto' può instradare verso modelli A PAGAMENTO, quindi l'ho tolto.
 # Verifica i nomi aggiornati dei modelli gratuiti su https://openrouter.ai/models?q=free
@@ -164,7 +169,16 @@ def modelli_gratuiti(api_key):
         return []
     preferiti = ("llama", "gemma", "qwen", "mistral", "deepseek", "gpt-oss")
     ids.sort(key=lambda i: next((n for n, k in enumerate(preferiti) if k in i), len(preferiti)))
-    return ids
+    # alterno i provider: se uno è bloccato (429), gli altri hanno più possibilità di rispondere
+    gruppi = {}
+    for i in ids:
+        gruppi.setdefault(i.split("/")[0], []).append(i)
+    alternati = []
+    while any(gruppi.values()):
+        for k in gruppi:
+            if gruppi[k]:
+                alternati.append(gruppi[k].pop(0))
+    return alternati
 
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -287,7 +301,7 @@ def cerca_info_prodotto(tavily_key, prodotto):
     return ddg_cerca(query)
 
 
-def genera_analisi(prodotto, offerte, info_web, api_key):
+def genera_analisi(prodotto, offerte, info_web, api_key, modello_extra=""):
     testo_offerte = "\n\n".join(
         f"Store/Titolo: {r['title']}\nURL: {r['url']}\n"
         f"Prezzo rilevato: {estrai_prezzo(r['title'] + ' ' + r['content']) or 'non indicato'}"
@@ -327,34 +341,36 @@ OFFERTE NEGOZI:
 {testo_offerte}"""
 
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key, max_retries=0)
-    candidati = list(dict.fromkeys(modelli_gratuiti(api_key) + MODELLI_IA))[:4]
+    elenco = ([modello_extra] if modello_extra else []) + modelli_gratuiti(api_key) + MODELLI_IA
+    tutti = list(dict.fromkeys(elenco))[:12]
 
     def prova(modello):
         resp = client.chat.completions.create(
             model=modello,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,
-            timeout=45,
+            max_tokens=2500,
+            timeout=40,
         )
         testo = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         if not testo:
             raise RuntimeError("risposta vuota")
         return testo, modello
 
-    # Lancio i modelli insieme e uso il primo che risponde, invece di provarli uno dopo l'altro
+    # A ondate di 4 modelli in parallelo: vince il primo che risponde; se tutti falliscono passo alla serie successiva
     errori = []
-    ex = ThreadPoolExecutor(max_workers=len(candidati))
-    futuri = {ex.submit(prova, m): m for m in candidati}
-    try:
-        for f in as_completed(futuri, timeout=60):
-            try:
-                return f.result()
-            except Exception as e:
-                errori.append(f"{futuri[f]}: {str(e)[:160]}")
-    except FuturesTimeout:
-        errori.append("tempo scaduto (60 secondi)")
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+    for k in range(0, len(tutti), 4):
+        ex = ThreadPoolExecutor(max_workers=4)
+        futuri = {ex.submit(prova, m): m for m in tutti[k:k + 4]}
+        try:
+            for f in as_completed(futuri, timeout=45):
+                try:
+                    return f.result()
+                except Exception as e:
+                    errori.append(f"`{futuri[f]}` → {str(e)[:120]}")
+        except FuturesTimeout:
+            errori.append("una serie di modelli non ha risposto in tempo")
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
     raise RuntimeError("Nessun modello ha risposto.\n\n" + "\n".join(f"- {x}" for x in errori))
 
 
@@ -436,7 +452,7 @@ if st.button("🔎 Analizza e confronta prezzi"):
             st.caption(f"Fonte dati: {fonte} · {len(risultati)} link validi su {len(grezzi)} trovati")
             try:
                 with st.spinner("Genero l'analisi..."):
-                    analisi, modello = genera_analisi(prodotto.strip(), risultati, info_web, openrouter_api_key)
+                    analisi, modello = genera_analisi(prodotto.strip(), risultati, info_web, openrouter_api_key, modello_scelto)
                 st.markdown(analisi)
                 st.caption(f"Modello usato: {modello}")
             except Exception as e:
