@@ -3,4 +3,5 @@ requests
 Pillow
 google-genai
 beautifulsoup4
+openai
 
