@@ -176,4 +176,121 @@ def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercat
             tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
             conteggio_validi += 1
 
-    if conteggio_validi
+    if conteggio_validi == 0:
+        return "⚠️ Nessuna offerta o recensione pertinente trovata per questa ricerca.", "Parsing Diretto"
+
+    return testo_fallback + tabella_diretta, "Parsing Diretto (Fallback Anti-503 Active)"
+
+# --- INTERFACCIA UTENTE ---
+
+st.subheader("1. Inserisci o fotografa il prodotto")
+metodo_inserimento = st.radio("Seleziona modalità:", ["✍️ Nome Prodotto", "📷 Carica Foto Prodotto"], horizontal=True)
+
+prodotto_base = ""
+
+if metodo_inserimento == "✍️ Nome Prodotto":
+    prodotto_base = st.text_input("Inserisci marca e modello:", placeholder="Es. iPhone 15 Pro, Dyson V15, PlayStation 5...")
+else:
+    foto = st.file_uploader("Carica un'immagine del prodotto", type=["jpg", "jpeg", "png"])
+    if foto:
+        st.image(foto, caption="Immagine caricata", width=220)
+        if not gemini_api_key:
+            st.error("⚠️ Per la ricerca tramite foto è necessaria la Gemini API Key nella barra laterale.")
+        else:
+            with st.spinner("🔍 Riconoscimento intelligente del prodotto..."):
+                prodotto_rilevato = identifica_prodotto_da_foto(foto, gemini_api_key)
+                if prodotto_rilevato:
+                    prodotto_base = prodotto_rilevato
+                    st.success(f"Prodotto identificato: **{prodotto_base}**")
+                else:
+                    st.warning("Impossibile identificare chiaramente il prodotto. Prova a inserire il nome manualmente.")
+
+st.markdown("---")
+
+st.subheader("2. Scegli dove cercare")
+modalita_acquisto = st.radio("Ambito di ricerca:", ["🛍️ Nuovo (Store & E-commerce)", "🔄 Usato (Mercatini & Privati)"], horizontal=True)
+
+tipo = None
+zona = ""
+modo_usato = ""
+
+if modalita_acquisto == "🛍️ Nuovo (Store & E-commerce)":
+    if st.button("🔎 Cerca Recensioni & Prezzi Nuovo", type="primary", use_container_width=True):
+        tipo = "nuovo"
+else:
+    modo_usato = st.radio("Tipo di consegna usato:", ["Con spedizione", "Ritiro a mano in zona"], horizontal=True)
+    if modo_usato == "Ritiro a mano in zona":
+        zona = st.text_input("Città o Provincia:", placeholder="Es. Milano, Roma, Brescia...")
+    if st.button("🔎 Cerca Recensioni & Occasioni Usato", type="primary", use_container_width=True):
+        tipo = "usato"
+
+# --- LOGICA DI ESECUZIONE ---
+
+if tipo:
+    if not prodotto_base.strip():
+        st.warning("⚠️ Per favore, inserisci un nome di prodotto valido o carica una foto prima di avviare la ricerca.")
+    else:
+        with st.status("🚀 Ricerca e analisi recensioni in corso...", expanded=True) as status:
+            st.write(f"🔎 Scansione web per: **{prodotto_base}**...")
+            
+            if tipo == "nuovo":
+                query_web = f'"{prodotto_base}" prezzo recensioni opinioni pro e contro (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:trovaprezzi.it)'
+                prompt_ia = (
+                    f"Sei un assistente esperto e imparziale per lo shopping in Italia per '{prodotto_base}'. "
+                    "Analizza i dati web forniti e scrivi una risposta strutturata esattamente in due sezioni distinte:\n\n"
+                    "### 📝 1. Recensione Dettagliata e Sintesi Esperti/Utenti\n"
+                    "- Scrivi un'analisi discorsiva approfondita del prodotto basata sulle recensioni raccolte.\n"
+                    "- Includi un elenco puntato chiaro dei **Pro (Punti di forza)**.\n"
+                    "- Includi un elenco puntato chiaro dei **Contro (Difetti o limiti riscontrati)**.\n\n"
+                    "### 📊 2. Tabella Prezzi e Offerte\n"
+                    "Crea una TABELLA Markdown pulita con colonne esatte:\n"
+                    "| Store / Piattaforma | Prezzo (€) | Link |\n"
+                    "REGOLE PER LA TABELLA:\n"
+                    "- Estrai il prezzo reale in Euro.\n"
+                    "- Ordina i risultati dal prezzo più basso.\n"
+                    "- Usa la sintassi Markdown `[Vai al Sito](URL)` per la colonna Link.\n\n"
+                    "Rispondi interamente in italiano."
+                )
+            else:
+                if modo_usato == "Ritiro a mano in zona":
+                    if not zona.strip():
+                        status.update(label="⚠️ Inserisci la città/zona per il ritiro a mano.", state="error")
+                        st.stop()
+                    query_web = f'"{prodotto_base}" {zona} (site:subito.it OR site:ebay.it)'
+                    prompt_ia = (
+                        f"Cerca annunci usati per '{prodotto_base}' con ritiro a mano a {zona}. "
+                        "Struttura la risposta in due parti:\n\n"
+                        "### 📝 1. Analisi Annunci e Consigli per l'Usato\n"
+                        "- Scrivi una panoramica sullo stato medio in cui si trova questo usato, cosa controllare prima dell'acquisto e valutazioni generali basate sugli annunci.\n\n"
+                        "### 📊 2. Tabella Annunci e Prezzi\n"
+                        "Crea una TABELLA Markdown con colonne esatte:\n"
+                        "| Piattaforma / Titolo | Prezzo (€) | Link |\n"
+                        "Usa la sintassi `[Vai all'Annuncio](URL)` per la colonna Link. Rispondi in italiano."
+                    )
+                else:
+                    query_web = f'"{prodotto_base}" (site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it)'
+                    prompt_ia = (
+                        f"Cerca annunci usati per '{prodotto_base}'. "
+                        "Struttura la risposta in due parti:\n\n"
+                        "### 📝 1. Analisi Annunci e Consigli per l'Usato\n"
+                        "- Scrivi una panoramica sullo stato medio e cosa valutare negli acquisti di seconda mano di questo prodotto.\n\n"
+                        "### 📊 2. Tabella Annunci e Prezzi\n"
+                        "Crea una TABELLA Markdown con colonne esatte:\n"
+                        "| Piattaforma / Titolo | Prezzo (€) | Link |\n"
+                        "Usa la sintassi `[Vai all'Annuncio](URL)` per la colonna Link. Rispondi in italiano."
+                    )
+
+            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
+            
+            if not risultati_web:
+                status.update(label="❌ Nessun risultato trovato.", state="error")
+                st.warning("Nessun dato trovato per questa ricerca. Prova a rendere il nome del prodotto più generico.")
+            else:
+                st.write(f"🤖 Generazione recensione e prezzi ({motore_usato})...")
+                
+                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(
+                    prompt_ia, risultati_web, prodotto_base, gemini_api_key
+                )
+                
+                status.update(label=f"✅ Analisi completata ({modalita_output})!", state="complete")
+                st.markdown(risultato_finale)
