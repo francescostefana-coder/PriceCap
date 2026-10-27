@@ -1,9 +1,9 @@
 import streamlit as st
 import requests
-from google import genai
 import urllib.parse
 from bs4 import BeautifulSoup
 import re
+from openai import OpenAI  # Usiamo il client standard compatibile
 
 # Configurazione pagina ottimizzata per smartphone (Mobile-First)
 st.set_page_config(
@@ -12,7 +12,6 @@ st.set_page_config(
     layout="centered"
 )
 
-# Stile grafico pulito e moderno
 st.markdown("""
 <style>
     .stApp { background-color: #F8FAFC; color: #1E293B; }
@@ -25,15 +24,17 @@ st.markdown("""
 st.title("🛍️ TechAdvisor Italia")
 st.caption("Recensioni intelligenti, alternative e i 3 prezzi migliori dai reali e-commerce.")
 
-# Configurazione API sicura da Streamlit Secrets o Sidebar
+# Configurazione API
 st.sidebar.header("🔑 Configurazione")
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
+openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.sidebar.text_input("OpenRouter API Key (Gratis)", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Modello richiesto e raccomandato direttamente dai server Google
-MODELLI_IA = ['gemini-3.8-flash']
-
-# --- FUNZIONI DI SUPPORTO E SICUREZZA ---
+# Modelli gratuiti e ultra-stabili su OpenRouter
+MODELLI_IA = [
+    'deepseek/deepseek-chat:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'mistralai/mistral-7b-instruct:free'
+]
 
 def pulisci_testo_markdown(testo):
     if not testo:
@@ -116,22 +117,31 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
         f"Dati raccolti:\n{testo_grezzo}"
     )
 
-    client = genai.Client(api_key=api_key)
+    # Configurazione client OpenRouter (OpenAI-compatibile)
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
+    
     ultimo_errore = ""
     
     for modello in MODELLI_IA:
         try:
-            response = client.models.generate_content(
-                model=modello, 
-                contents=prompt
+            response = client.chat.completions.create(
+                model=modello,
+                messages=[{"role": "user", "content": prompt}],
+                extra_headers={
+                    "HTTP-Referer": "https://github.com/pricecap", # Opzionale per OpenRouter
+                    "X-Title": "TechAdvisor Italia",
+                }
             )
-            if response and response.text:
-                return response.text, f"IA ({modello})"
+            if response and response.choices[0].message.content:
+                return response.choices[0].message.content, f"OpenRouter ({modello})"
         except Exception as e:
             ultimo_errore = str(e)
             continue
             
-    raise Exception(f"Errore Google API: {ultimo_errore}")
+    raise Exception(f"Errore OpenRouter: {ultimo_errore}")
 
 # --- INTERFACCIA UTENTE ---
 
@@ -144,8 +154,8 @@ with col1:
 if cerca_btn:
     if not prodotto_input.strip():
         st.warning("Inserisci il nome di un prodotto elettronico.")
-    elif not gemini_api_key.strip():
-        st.error("Inserisci la tua Gemini API Key nella barra laterale a sinistra.")
+    elif not openrouter_api_key.strip():
+        st.error("Inserisci la tua OpenRouter API Key nella barra laterale a sinistra.")
     else:
         with st.status("Scansione e-commerce italiani autorizzati...", expanded=True) as status:
             st.write("Filtro anti-aggregatori e blog in corso...")
@@ -157,8 +167,8 @@ if cerca_btn:
             else:
                 st.write(f"Elaborazione recensione e prezzi ({fonte_ricerca})...")
                 try:
-                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
-                    status.update(label="Analisi completata con successo!", state="complete")
+                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, openrouter_api_key)
+                    status.update(label=f"Analisi completata ({modalita})!", state="complete")
                     st.markdown("---")
                     st.markdown(output_finale)
                 except Exception as e:
