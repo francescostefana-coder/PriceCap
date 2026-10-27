@@ -30,8 +30,8 @@ st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Aggiornato al modello raccomandato dall'API di Google
-MODELLI_IA = ['gemini-3.8-flash', 'gemini-1.5-flash']
+# Utilizzo dell'ultimo modello più recente e relativi fallback
+MODELLI_IA = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash']
 
 # --- FUNZIONI DI SUPPORTO E SICUREZZA ---
 
@@ -129,43 +129,4 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
     
     for modello in MODELLI_IA:
         try:
-            response = client.models.generate_content(model=modello, contents=prompt)
-            if response and response.text:
-                return response.text, f"IA ({modello})"
-        except Exception as e:
-            ultimo_errore = str(e)
-            continue
-            
-    raise Exception(f"Errore Google API: {ultimo_errore}")
-
-# --- INTERFACCIA UTENTE ---
-
-prodotto_input = st.text_input("Cerca un prodotto elettronico:", placeholder="Es. iPhone 15, Sony WH-1000XM5, TV LG OLED...")
-
-col1, col2 = st.columns(2)
-with col1:
-    cerca_btn = st.button("Analizza e Trova Prezzi", type="primary")
-
-if cerca_btn:
-    if not prodotto_input.strip():
-        st.warning("Inserisci il nome di un prodotto elettronico.")
-    elif not gemini_api_key.strip():
-        st.error("Inserisci la tua Gemini API Key nella barra laterale a sinistra.")
-    else:
-        with st.status("Scansione e-commerce italiani autorizzati...", expanded=True) as status:
-            st.write("Filtro anti-aggregatori e blog in corso...")
-            risultati_web, fonte_ricerca = cerca_sul_web_sicura(tavily_api_key, prodotto_input)
-            
-            if not risultati_web:
-                status.update(label="Nessun riscontro trovato.", state="error")
-                st.warning("Prova a specificare meglio il modello esatto.")
-            else:
-                st.write(f"Elaborazione recensione e prezzi ({fonte_ricerca})...")
-                try:
-                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
-                    status.update(label="Analisi completata con successo!", state="complete")
-                    st.markdown("---")
-                    st.markdown(output_finale)
-                except Exception as e:
-                    status.update(label="Errore elaborazione IA", state="error")
-                    st.error(f"{e}")
+            response = client.models.generate_content(model
