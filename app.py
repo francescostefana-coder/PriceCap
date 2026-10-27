@@ -1,31 +1,38 @@
 import streamlit as st
 import requests
-from PIL import Image
 from google import genai
 import urllib.parse
 from bs4 import BeautifulSoup
 import re
 
-# Configurazione pagina Streamlit
+# Configurazione pagina ottimizzata per smartphone (Mobile-First)
 st.set_page_config(
-    page_title="TrovaPrezzi & Recensioni Italia", 
-    page_icon="⚡", 
+    page_title="TechAdvisor & Price Finder", 
+    page_icon="🛍️", 
     layout="centered"
 )
 
-# --- INTESTAZIONE ---
-st.title("⚡ TrovaPrezzi, Usato & Recensioni")
-st.caption("Recensioni dettagliate, analisi Pro/Contro e confronto prezzi in tempo reale.")
+# Stile grafico pulito e moderno
+st.markdown("""
+<style>
+    .stApp { background-color: #F8FAFC; color: #1E293B; }
+    h1 { color: #0F172A; font-weight: 800; }
+    .stButton>button { width: 100%; border-radius: 10px; background-color: #2563EB; color: white; font-weight: bold; }
+    .stButton>button:hover { background-color: #1D4ED8; }
+</style>
+""", unsafe_allow_html=True)
 
-# --- CONFIGURAZIONE API SIDEBAR ---
-st.sidebar.header("🔑 Configurazione API")
+st.title("🛍️ TechAdvisor Italia")
+st.caption("Recensioni intelligenti, alternative e i 3 prezzi migliori dai reali e-commerce.")
+
+# Configurazione API sicura da Streamlit Secrets o Sidebar
+st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
 MODELLI_IA = ['gemini-1.5-flash', 'gemini-1.5-pro']
-BLACKLIST_TERMINI = ["come scaricare", "come fare", "guida tutorial", "scarica gratis"]
 
-# --- UTILITIES & PARSING ---
+# --- FUNZIONI DI SUPPORTO E SICUREZZA ---
 
 def pulisci_testo_markdown(testo):
     if not testo:
@@ -39,55 +46,25 @@ def estrai_prezzo_da_testo(testo):
         return f"{p} €"
     return "Vedi link"
 
-def e_risultato_pertinente(titolo, snippet, prodotto_cercato):
-    testo_totale = f"{titolo} {snippet}".lower()
-    for bad_word in BLACKLIST_TERMINI:
-        if bad_word in testo_totale:
-            return False
-    parole_prodotto = [p.lower() for p in prodotto_cercato.split() if len(p) > 2]
-    if not parole_prodotto:
-        return True
-    matches = sum(1 for p in parole_prodotto if p in testo_totale)
-    return (matches / len(parole_prodotto)) >= 0.4
-
-# --- AI & VISION SERVICE ---
-
-def identifica_prodotto_da_foto(image_file, api_key):
-    if not api_key:
-        return ""
-    try:
-        client = genai.Client(api_key=api_key)
-        img = Image.open(image_file)
-        prompt = "Identifica il prodotto in foto. Scrivi SOLO marca e modello esatto (es. 'Dyson V15 Detect'), senza punti o spiegazioni."
-        
-        for modello in MODELLI_IA:
-            try:
-                response = client.models.generate_content(
-                    model=modello,
-                    contents=[img, prompt]
-                )
-                if response and response.text:
-                    return response.text.strip()
-            except Exception:
-                continue
-    except Exception as e:
-        st.sidebar.error(f"Errore Vision: {e}")
-    return ""
-
-# --- SEARCH ENGINE SERVICE ---
-
-def cerca_sul_web_sicura(tavily_key, query):
+def cerca_solo_ecommerce_reali(tavily_key, query_prodotto):
+    """
+    Cerca escludendo tassativamente Trovaprezzi, Eprice, blog e forum,
+    restringendo la ricerca ai principali store di elettronica in Italia.
+    """
+    # Filtro di ricerca avanzato per forzare solo e-commerce reali
+    query_reale = f'"{query_prodotto}" (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trony.it OR site:monclick.it) -site:trovaprezzi.it -site:eprice.it -site:blog.* -site:forum.*'
+    
     risultati = []
     
-    # 1. Tavily API
+    # 1. Tavily API (se configurata)
     if tavily_key:
         try:
             url = "https://api.tavily.com/search"
             payload = {
                 "api_key": tavily_key,
-                "query": query,
+                "query": query_reale,
                 "search_depth": "basic",
-                "max_results": 10,
+                "max_results": 8,
                 "include_answer": False
             }
             res = requests.post(url, json=payload, timeout=4)
@@ -100,53 +77,69 @@ def cerca_sul_web_sicura(tavily_key, query):
                         "content": pulisci_testo_markdown(r.get("content", ""))
                     })
                 if risultati:
-                    return risultati, "Tavily API"
+                    return risultati, "Tavily (Store Filtrati)"
         except Exception:
             pass
 
-    # 2. DuckDuckGo HTML Scraping (Fallback)
+    # 2. DuckDuckGo HTML Fallback con filtri rigidi sugli store
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-        query_encoded = urllib.parse.quote(query)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        query_encoded = urllib.parse.quote(query_reale)
         url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
-        res = requests.post(url, headers=headers, data={'q': query}, timeout=4)
+        res = requests.post(url, headers=headers, data={'q': query_reale}, timeout=4)
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
             blocchi = soup.select(".result") or soup.select(".web-result")
             
-            for r in blocchi[:10]:
+            for r in blocchi[:8]:
                 title_elem = r.select_one(".result__title a") or r.select_one(".result__a")
                 snippet_elem = r.select_one(".result__snippet")
                 if title_elem:
-                    risultati.append({
-                        "title": pulisci_testo_markdown(title_elem.get_text(strip=True)),
-                        "url": title_elem.get("href", ""),
-                        "content": pulisci_testo_markdown(snippet_elem.get_text(strip=True)) if snippet_elem else ""
-                    })
+                    url_dest = title_elem.get("href", "")
+                    # Doppia verifica di sicurezza anti-aggregatori/blog
+                    if not any(x in url_dest for x in ["trovaprezzi", "eprice", "blog", "forum", "wiki"]):
+                        risultati.append({
+                            "title": pulisci_testo_markdown(title_elem.get_text(strip=True)),
+                            "url": url_dest,
+                            "content": pulisci_testo_markdown(snippet_elem.get_text(strip=True)) if snippet_elem else ""
+                        })
         if risultati:
-            return risultati, "DuckDuckGo HTML"
+            return risultati, "DuckDuckGo (Store Filtrati)"
     except Exception:
         pass
 
     return [], "Nessuno"
 
-# --- LLM PROCESSING & FALLBACK ENGINE ---
-
-def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercato, api_key):
-    testo_grezzo = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati_web])
+def genera_analisi_completa(prodotto, risultati_web, api_key):
+    """Usa Gemini per elaborare recensione, pro/contro, alternative e top 3 prezzi."""
+    testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
+    prompt = (
+        f"Sei un esperto tecnologico e consumer advocate per il mercato italiano. "
+        f"Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.\n\n"
+        f"Crea una risposta strutturata esattamente nelle seguenti 4 sezioni in italiano:\n\n"
+        f"### 📝 1. Recensione Chiara e Rielaborata\n"
+        f"- Scrivi una recensione approfondita, originale e fruibile da chiunque (senza copia-incolla meccanico), basata sulle reali esperienze d'uso.\n"
+        f"- **Pro (Punti di forza):** Elenco puntato chiaro.\n"
+        f"- **Contro (Limiti/Difetti):** Elenco puntato chiaro.\n\n"
+        f"### 🔄 2. Valide Alternative\n"
+        f"- Consiglia 2 o 3 prodotti alternativi presenti sul mercato italiano della stessa categoria o fascia di prezzo, spiegando brevemente perché sceglierli.\n\n"
+        f"### 📊 3. Top 3 Prezzi e Offerte\n"
+        f"Crea una TABELLA Markdown ordinata dal prezzo più basso con esattamente queste colonne:\n"
+        f"| E-commerce / Negozio | Prezzo (€) | Link Diretto |\n"
+        f"REGOLE TABELLA:\n"
+        f"- Inserisci solo i **migliori 3 prezzi reali** trovati nei dati forniti.\n"
+        f"- Usa la sintassi Markdown `[Vai al Negozio](URL)` per la colonna del link.\n\n"
+        f"Dati di e-commerce raccolti:\n{testo_grezzo}"
+    )
+
     if api_key:
         try:
             client = genai.Client(api_key=api_key)
-            prompt_completo = f"{prompt_sistema}\n\nDati dal web:\n{testo_grezzo}"
-            
             for modello in MODELLI_IA:
                 try:
-                    response = client.models.generate_content(
-                        model=modello,
-                        contents=prompt_completo
-                    )
+                    response = client.models.generate_content(model=modello, contents=prompt)
                     if response and response.text:
                         return response.text, f"IA ({modello})"
                 except Exception:
@@ -154,143 +147,37 @@ def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercat
         except Exception:
             pass
 
-    # Fallback Deterministico
-    testo_fallback = f"### 📝 Recensioni e Sintesi Automatica ({prodotto_cercato})\n\n"
-    testo_fallback += "Basato sulle informazioni estratte dal web, ecco una panoramica rapida delle esperienze d'uso raccolte:\n\n"
-    
-    count_snippet = 0
-    for r in risultati_web:
-        if e_risultato_pertinente(r['title'], r['content'], prodotto_cercato) and count_snippet < 3:
-            testo_fallback += f"- *{r['content'][:120]}...*\n"
-            count_snippet += 1
-            
-    testo_fallback += "\n---\n\n### 📊 Tabella Prezzi e Offerte Rilevate\n\n"
-    head = "| Store / Titolo | Prezzo (€) | Link |\n| :--- | :--- | :--- |\n"
-    tabella_diretta = head
-    conteggio_validi = 0
-    
-    for r in risultati_web:
-        if e_risultato_pertinente(r['title'], r['content'], prodotto_cercato):
-            titolo_pulito = r['title'][:55]
-            prezzo = estrai_prezzo_da_testo(f"{r['title']} {r['content']}")
-            tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
-            conteggio_validi += 1
-
-    if conteggio_validi == 0:
-        return "⚠️ Nessuna offerta o recensione pertinente trovata per questa ricerca.", "Parsing Diretto"
-
-    return testo_fallback + tabella_diretta, "Parsing Diretto (Fallback Anti-503 Active)"
+    # Fallback d'emergenza se manca la chiave IA
+    fallback_text = f"### 📝 Recensione Rapida ({prodotto})\nAnalisi automatica basata sui risultati degli store.\n\n### 📊 Top Prezzi Rilevati\n"
+    fallback_text += "| Negozio | Prezzo | Link |\n| :--- | :--- | :--- |\n"
+    for r in risultati_web[:3]:
+        prezzo = estrai_prezzo_da_testo(f"{r['title']} {r['content']}")
+        fallback_text += f"| {r['title'][:40]} | `{prezzo}` | [Vai al Negozio]({r['url']}) |\n"
+    return fallback_text, "Fallback Deterministico"
 
 # --- INTERFACCIA UTENTE ---
 
-st.subheader("1. Inserisci o fotografa il prodotto")
-metodo_inserimento = st.radio("Seleziona modalità:", ["✍️ Nome Prodotto", "📷 Carica Foto Prodotto"], horizontal=True)
+prodotto_input = st.text_input("🔍 Cerca un prodotto elettronico:", placeholder="Es. iPhone 15, Sony WH-1000XM5, TV LG OLED...")
 
-prodotto_base = ""
+col1, col2 = st.columns(2)
+with col1:
+    cerca_btn = st.button("🚀 Analizza e Trova Prezzi", type="primary")
 
-if metodo_inserimento == "✍️ Nome Prodotto":
-    prodotto_base = st.text_input("Inserisci marca e modello:", placeholder="Es. iPhone 15 Pro, Dyson V15, PlayStation 5...")
-else:
-    foto = st.file_uploader("Carica un'immagine del prodotto", type=["jpg", "jpeg", "png"])
-    if foto:
-        st.image(foto, caption="Immagine caricata", width=220)
-        if not gemini_api_key:
-            st.error("⚠️ Per la ricerca tramite foto è necessaria la Gemini API Key nella barra laterale.")
-        else:
-            with st.spinner("🔍 Riconoscimento intelligente del prodotto..."):
-                prodotto_rilevato = identifica_prodotto_da_foto(foto, gemini_api_key)
-                if prodotto_rilevato:
-                    prodotto_base = prodotto_rilevato
-                    st.success(f"Prodotto identificato: **{prodotto_base}**")
-                else:
-                    st.warning("Impossibile identificare chiaramente il prodotto. Prova a inserire il nome manualmente.")
-
-st.markdown("---")
-
-st.subheader("2. Scegli dove cercare")
-modalita_acquisto = st.radio("Ambito di ricerca:", ["🛍️ Nuovo (Store & E-commerce)", "🔄 Usato (Mercatini & Privati)"], horizontal=True)
-
-tipo = None
-zona = ""
-modo_usato = ""
-
-if modalita_acquisto == "🛍️ Nuovo (Store & E-commerce)":
-    if st.button("🔎 Cerca Recensioni & Prezzi Nuovo", type="primary", use_container_width=True):
-        tipo = "nuovo"
-else:
-    modo_usato = st.radio("Tipo di consegna usato:", ["Con spedizione", "Ritiro a mano in zona"], horizontal=True)
-    if modo_usato == "Ritiro a mano in zona":
-        zona = st.text_input("Città o Provincia:", placeholder="Es. Milano, Roma, Brescia...")
-    if st.button("🔎 Cerca Recensioni & Occasioni Usato", type="primary", use_container_width=True):
-        tipo = "usato"
-
-# --- LOGICA DI ESECUZIONE ---
-
-if tipo:
-    if not prodotto_base.strip():
-        st.warning("⚠️ Per favore, inserisci un nome di prodotto valido o carica una foto prima di avviare la ricerca.")
+if cerca_btn:
+    if not prodotto_input.strip():
+        st.warning("⚠️ Inserisci il nome di un prodotto elettronico.")
     else:
-        with st.status("🚀 Ricerca e analisi recensioni in corso...", expanded=True) as status:
-            st.write(f"🔎 Scansione web per: **{prodotto_base}**...")
-            
-            if tipo == "nuovo":
-                query_web = f'"{prodotto_base}" prezzo recensioni opinioni pro e contro (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:trovaprezzi.it)'
-                prompt_ia = (
-                    f"Sei un assistente esperto e imparziale per lo shopping in Italia per '{prodotto_base}'. "
-                    "Analizza i dati web forniti e scrivi una risposta strutturata esattamente in due sezioni distinte:\n\n"
-                    "### 📝 1. Recensione Dettagliata e Sintesi Esperti/Utenti\n"
-                    "- Scrivi un'analisi discorsiva approfondita del prodotto basata sulle recensioni raccolte.\n"
-                    "- Includi un elenco puntato chiaro dei **Pro (Punti di forza)**.\n"
-                    "- Includi un elenco puntato chiaro dei **Contro (Difetti o limiti riscontrati)**.\n\n"
-                    "### 📊 2. Tabella Prezzi e Offerte\n"
-                    "Crea una TABELLA Markdown pulita con colonne esatte:\n"
-                    "| Store / Piattaforma | Prezzo (€) | Link |\n"
-                    "REGOLE PER LA TABELLA:\n"
-                    "- Estrai il prezzo reale in Euro.\n"
-                    "- Ordina i risultati dal prezzo più basso.\n"
-                    "- Usa la sintassi Markdown `[Vai al Sito](URL)` per la colonna Link.\n\n"
-                    "Rispondi interamente in italiano."
-                )
-            else:
-                if modo_usato == "Ritiro a mano in zona":
-                    if not zona.strip():
-                        status.update(label="⚠️ Inserisci la città/zona per il ritiro a mano.", state="error")
-                        st.stop()
-                    query_web = f'"{prodotto_base}" {zona} (site:subito.it OR site:ebay.it)'
-                    prompt_ia = (
-                        f"Cerca annunci usati per '{prodotto_base}' con ritiro a mano a {zona}. "
-                        "Struttura la risposta in due parti:\n\n"
-                        "### 📝 1. Analisi Annunci e Consigli per l'Usato\n"
-                        "- Scrivi una panoramica sullo stato medio in cui si trova questo usato, cosa controllare prima dell'acquisto e valutazioni generali basate sugli annunci.\n\n"
-                        "### 📊 2. Tabella Annunci e Prezzi\n"
-                        "Crea una TABELLA Markdown con colonne esatte:\n"
-                        "| Piattaforma / Titolo | Prezzo (€) | Link |\n"
-                        "Usa la sintassi `[Vai all'Annuncio](URL)` per la colonna Link. Rispondi in italiano."
-                    )
-                else:
-                    query_web = f'"{prodotto_base}" (site:subito.it OR site:vinted.it OR site:wallapop.it OR site:ebay.it)'
-                    prompt_ia = (
-                        f"Cerca annunci usati per '{prodotto_base}'. "
-                        "Struttura la risposta in due parti:\n\n"
-                        "### 📝 1. Analisi Annunci e Consigli per l'Usato\n"
-                        "- Scrivi una panoramica sullo stato medio e cosa valutare negli acquisti di seconda mano di questo prodotto.\n\n"
-                        "### 📊 2. Tabella Annunci e Prezzi\n"
-                        "Crea una TABELLA Markdown con colonne esatte:\n"
-                        "| Piattaforma / Titolo | Prezzo (€) | Link |\n"
-                        "Usa la sintassi `[Vai all'Annuncio](URL)` per la colonna Link. Rispondi in italiano."
-                    )
-
-            risultati_web, motore_usato = cerca_sul_web_sicura(tavily_api_key, query_web)
+        with st.status("🔍 Scansione e-commerce italiani autorizzati...", expanded=True) as status:
+            st.write("Filtro rigoroso anti-aggregatori e blog in corso...")
+            risultati_web, fonte_ricerca = cerca_sul_web_sicura(tavily_api_key, prodotto_input)
             
             if not risultati_web:
-                status.update(label="❌ Nessun risultato trovato.", state="error")
-                st.warning("Nessun dato trovato per questa ricerca. Prova a rendere il nome del prodotto più generico.")
+                status.update(label="❌ Nessun riscontro diretto trovato sugli store.", state="error")
+                st.warning("Prova a specificare meglio il modello esatto del prodotto (es. marca + modello completo).")
             else:
-                st.write(f"🤖 Generazione recensione e prezzi ({motore_usato})...")
+                st.write(f"🤖 Elaborazione recensione, pro/contro e top prezzi ({fonte_ricerca})...")
+                output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
                 
-                risultato_finale, modalita_output = elabora_con_gemini_o_fallback(
-                    prompt_ia, risultati_web, prodotto_base, gemini_api_key
-                )
-                
-                status.update(label=f"✅ Analisi completata ({modalita_output})!", state="complete")
-                st.markdown(risultato_finale)
+                status.update(label=f"✅ Analisi completata con successo!", state="complete")
+                st.markdown("---")
+                st.markdown(output_finale)
