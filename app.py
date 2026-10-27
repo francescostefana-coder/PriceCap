@@ -57,9 +57,70 @@ def e_risultato_pertinente(titolo, snippet, prodotto_cercato):
 def identifica_prodotto_da_foto(image_file, api_key):
     if not api_key:
         return ""
-    client = genai.Client(api_key=api_key)
-    img = Image.open(image_file)
-    for modello in MODELLI_IA:
+    try:
+        client = genai.Client(api_key=api_key)
+        img = Image.open(image_file)
+        prompt = "Scrivi SOLO il nome esatto del prodotto (marca e modello), senza altre parole."
+        
+        for modello in MODELLI_IA:
+            try:
+                response = client.models.generate_content(
+                    model=modello,
+                    contents=[img, prompt]
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+def cerca_sul_web_sicura(tavily_key, query):
+    risultati = []
+    if tavily_key:
         try:
-            response = client.models.generate_content(
-                model
+            url = "https://api.tavily.com/search"
+            payload = {
+                "api_key": tavily_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 10,
+                "include_answer": False
+            }
+            res = requests.post(url, json=payload, timeout=3)
+            if res.status_code == 200:
+                data = res.json().get("results", [])
+                for r in data:
+                    risultati.append({
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "content": r.get("content", "")
+                    })
+                if risultati:
+                    return risultati, "Tavily API"
+        except Exception:
+            pass
+
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        query_encoded = urllib.parse.quote(query)
+        url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
+        res = requests.post(url, headers=headers, data={'q': query}, timeout=3)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for r in soup.select(".result")[:10]:
+                title_elem = r.select_one(".result__title a")
+                snippet_elem = r.select_one(".result__snippet")
+                if title_elem:
+                    risultati.append({
+                        "title": title_elem.get_text(strip=True),
+                        "url": title_elem.get("href"),
+                        "content": snippet_elem.get_text(strip=True) if snippet_elem else ""
+                    })
+        if risultati:
+            return risultati, "DuckDuckGo HTML"
+    except Exception:
+        pass
+
+    return
