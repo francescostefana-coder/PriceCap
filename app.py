@@ -46,12 +46,11 @@ def estrai_prezzo_da_testo(testo):
         return f"{p} €"
     return "Vedi link"
 
-def cerca_solo_ecommerce_reali(tavily_key, query_prodotto):
+def cerca_sul_web_sicura(tavily_key, query_prodotto):
     """
     Cerca escludendo tassativamente Trovaprezzi, Eprice, blog e forum,
     restringendo la ricerca ai principali store di elettronica in Italia.
     """
-    # Filtro di ricerca avanzato per forzare solo e-commerce reali
     query_reale = f'"{query_prodotto}" (site:amazon.it OR site:mediaworld.it OR site:unieuro.it OR site:euronics.it OR site:trony.it OR site:monclick.it) -site:trovaprezzi.it -site:eprice.it -site:blog.* -site:forum.*'
     
     risultati = []
@@ -97,7 +96,6 @@ def cerca_solo_ecommerce_reali(tavily_key, query_prodotto):
                 snippet_elem = r.select_one(".result__snippet")
                 if title_elem:
                     url_dest = title_elem.get("href", "")
-                    # Doppia verifica di sicurezza anti-aggregatori/blog
                     if not any(x in url_dest for x in ["trovaprezzi", "eprice", "blog", "forum", "wiki"]):
                         risultati.append({
                             "title": pulisci_testo_markdown(title_elem.get_text(strip=True)),
