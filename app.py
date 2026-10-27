@@ -100,27 +100,4 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
 def genera_analisi_completa(prodotto, risultati_web, api_key):
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
-    prompt = f"Sei un esperto tecnologico per il mercato italiano. Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.\n\nCrea una risposta strutturata esattamente nelle seguenti 4 sezioni in italiano:\n\n### Recensione Dettagliata\n- Scrivi una recensione approfondita e originale basata sulle reali esperienze d'uso.\n- Pro (Punti di forza): elenco puntato.\n- Contro (Limiti): elenco puntato.\n\n### Valide Alternative\n- Consiglia 2 o 3 prodotti alternativi sul mercato italiano.\n\n### Top 3 Prezzi e Offerte\nCrea una TABELLA Markdown ordinata dal prezzo piu basso con queste colonne:\n| Negozio | Prezzo (€) | Link Diretto |\nIncludi i migliori 3 prezzi reali e usa la sintassi [Vai al Negozio](URL) per il link.\n\nDati raccolti:\n{testo_grezzo}"
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-    )
-    
-    ultimo_errore = ""
-    
-    for modello in MODELLI_IA:
-        try:
-            response = client.chat.completions.create(
-                model=modello,
-                messages=[{"role": "user", "content": prompt}],
-                extra_headers={
-                    "HTTP-Referer": "https://github.com/pricecap",
-                    "X-Title": "TechAdvisor Italia",
-                }
-            )
-            if response and response.choices[0].message.content:
-                modello_utilizzato = getattr(response, 'model', modello)
-                return response.choices[0].message.content, f"OpenRouter ({modello_utilizzato})"
-        except Exception as e:
-            ultimo_errore
+    prompt = f"Sei un esperto tecnologico per il mercato italiano. Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.\n\nCrea una risposta strutturata esattamente nelle seguenti 4
