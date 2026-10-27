@@ -39,13 +39,6 @@ def pulisci_testo_markdown(testo):
         return ""
     return testo.replace("|", "-").replace("[", "(").replace("]", ")").replace("\n", " ").strip()
 
-def estrai_prezzo_da_testo(testo):
-    match = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)\s*€|€\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)', testo)
-    if match:
-        p = match.group(1) or match.group(2)
-        return f"{p} €"
-    return "Vedi link"
-
 def cerca_sul_web_sicura(tavily_key, query_prodotto):
     """
     Cerca escludendo tassativamente Trovaprezzi, Eprice, blog e forum,
@@ -127,31 +120,22 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
         f"Crea una TABELLA Markdown ordinata dal prezzo più basso con esattamente queste colonne:\n"
         f"| E-commerce / Negozio | Prezzo (€) | Link Diretto |\n"
         f"REGOLE TABELLA:\n"
-        f"- Inserisci solo i **migliori 3 prezzi reali** trovati nei dati forniti.\n"
+        f"- Estrai e deduci i prezzi reali in Euro dai dati forniti per gli store.\n"
+        f"- Inserisci solo i **migliori 3 prezzi reali** trovati.\n"
         f"- Usa la sintassi Markdown `[Vai al Negozio](URL)` per la colonna del link.\n\n"
         f"Dati di e-commerce raccolti:\n{testo_grezzo}"
     )
 
-    if api_key:
+    client = genai.Client(api_key=api_key)
+    for modello in MODELLI_IA:
         try:
-            client = genai.Client(api_key=api_key)
-            for modello in MODELLI_IA:
-                try:
-                    response = client.models.generate_content(model=modello, contents=prompt)
-                    if response and response.text:
-                        return response.text, f"IA ({modello})"
-                except Exception:
-                    continue
+            response = client.models.generate_content(model=modello, contents=prompt)
+            if response and response.text:
+                return response.text, f"IA ({modello})"
         except Exception:
-            pass
-
-    # Fallback d'emergenza se manca la chiave IA
-    fallback_text = f"### 📝 Recensione Rapida ({prodotto})\nAnalisi automatica basata sui risultati degli store.\n\n### 📊 Top Prezzi Rilevati\n"
-    fallback_text += "| Negozio | Prezzo | Link |\n| :--- | :--- | :--- |\n"
-    for r in risultati_web[:3]:
-        prezzo = estrai_prezzo_da_testo(f"{r['title']} {r['content']}")
-        fallback_text += f"| {r['title'][:40]} | `{prezzo}` | [Vai al Negozio]({r['url']}) |\n"
-    return fallback_text, "Fallback Deterministico"
+            continue
+            
+    raise Exception("Impossibile contattare i modelli Gemini con la chiave fornita.")
 
 # --- INTERFACCIA UTENTE ---
 
@@ -164,6 +148,8 @@ with col1:
 if cerca_btn:
     if not prodotto_input.strip():
         st.warning("⚠️ Inserisci il nome di un prodotto elettronico.")
+    elif not gemini_api_key.strip():
+        st.error("⚠️ **Attenzione:** Inserisci la tua **Gemini API Key** nella barra laterale a sinistra per generare la recensione e trovare i prezzi!")
     else:
         with st.status("🔍 Scansione e-commerce italiani autorizzati...", expanded=True) as status:
             st.write("Filtro rigoroso anti-aggregatori e blog in corso...")
@@ -174,8 +160,11 @@ if cerca_btn:
                 st.warning("Prova a specificare meglio il modello esatto del prodotto (es. marca + modello completo).")
             else:
                 st.write(f"🤖 Elaborazione recensione, pro/contro e top prezzi ({fonte_ricerca})...")
-                output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
-                
-                status.update(label=f"✅ Analisi completata con successo!", state="complete")
-                st.markdown("---")
-                st.markdown(output_finale)
+                try:
+                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
+                    status.update(label=f"✅ Analisi completata con successo!", state="complete")
+                    st.markdown("---")
+                    st.markdown(output_finale)
+                except Exception as e:
+                    status.update(label="❌ Errore durante l'elaborazione dell'IA.", state="error")
+                    st.error(f"Dettaglio errore: {e}")
