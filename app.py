@@ -30,7 +30,8 @@ st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-MODELLI_IA = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+# Modello richiesto e raccomandato direttamente dai server Google
+MODELLI_IA = ['gemini-3.8-flash']
 
 # --- FUNZIONI DI SUPPORTO E SICUREZZA ---
 
@@ -120,7 +121,10 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
     
     for modello in MODELLI_IA:
         try:
-            response = client.models.generate_content(model=modello, contents=prompt)
+            response = client.models.generate_content(
+                model=modello, 
+                contents=prompt
+            )
             if response and response.text:
                 return response.text, f"IA ({modello})"
         except Exception as e:
