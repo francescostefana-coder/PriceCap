@@ -30,7 +30,8 @@ st.sidebar.header("🔑 Configurazione")
 gemini_api_key = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input("Gemini API Key", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-MODELLI_IA = ['gemini-1.5-flash', 'gemini-1.5-pro']
+# Aggiornato ai modelli attuali supportati dall'API
+MODELLI_IA = ['gemini-2.5-flash', 'gemini-2.0-flash']
 
 # --- FUNZIONI DI SUPPORTO E SICUREZZA ---
 
