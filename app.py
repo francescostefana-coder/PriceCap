@@ -29,9 +29,9 @@ st.sidebar.header("🔑 Configurazione")
 openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.sidebar.text_input("OpenRouter API Key (Gratis)", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Modelli gratuiti di fallback con dicitura generica o modelli attivi
+# Modelli gratuiti di fallback con auto-routing dinamico
 MODELLI_IA = [
-    'openrouter/auto',  # Lascia che OpenRouter individui automaticamente un modello libero
+    'openrouter/auto',
     'meta-llama/llama-3.3-70b-instruct:free',
     'google/gemini-2.0-flash-exp:free'
 ]
@@ -100,8 +100,6 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
 def genera_analisi_completa(prodotto, risultati_web, api_key):
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
-    prompt = (
-        f"Sei un esperto tecnologico per il mercato italiano. "
-        f"Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.\n\n"
-        f"Crea una risposta strutturata esattamente nelle seguenti 4 sezioni in italiano:\n\n"
-        f"
+    prompt = f"""Sei un esperto tecnologico per il mercato italiano. Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.
+
+C
