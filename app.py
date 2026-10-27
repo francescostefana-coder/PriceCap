@@ -3,7 +3,7 @@ import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 import re
-from openai import OpenAI  # Usiamo il client standard compatibile
+from openai import OpenAI
 
 # Configurazione pagina ottimizzata per smartphone (Mobile-First)
 st.set_page_config(
@@ -24,16 +24,15 @@ st.markdown("""
 st.title("🛍️ TechAdvisor Italia")
 st.caption("Recensioni intelligenti, alternative e i 3 prezzi migliori dai reali e-commerce.")
 
-# Configurazione API
+# Configurazione API (legge automaticamente dai Secrets se configurati)
 st.sidebar.header("🔑 Configurazione")
 openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.sidebar.text_input("OpenRouter API Key (Gratis)", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Modelli gratuiti e ultra-stabili su OpenRouter
+# Modelli gratuiti attualmente attivi e stabili su OpenRouter
 MODELLI_IA = [
-    'deepseek/deepseek-chat:free',
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'mistralai/mistral-7b-instruct:free'
+    'deepseek/deepseek-r1:free',
+    'meta-llama/llama-3.1-8b-instruct:free'
 ]
 
 def pulisci_testo_markdown(testo):
@@ -117,7 +116,6 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
         f"Dati raccolti:\n{testo_grezzo}"
     )
 
-    # Configurazione client OpenRouter (OpenAI-compatibile)
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=api_key,
@@ -131,7 +129,7 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
                 model=modello,
                 messages=[{"role": "user", "content": prompt}],
                 extra_headers={
-                    "HTTP-Referer": "https://github.com/pricecap", # Opzionale per OpenRouter
+                    "HTTP-Referer": "https://github.com/pricecap",
                     "X-Title": "TechAdvisor Italia",
                 }
             )
