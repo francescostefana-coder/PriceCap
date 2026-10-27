@@ -112,4 +112,68 @@ def cerca_sul_web_sicura(tavily_key, query):
         res = requests.post(url, headers=headers, data={'q': query}, timeout=4)
         
         if res.status_code == 200:
-            soup = BeautifulSoup(res.
+            soup = BeautifulSoup(res.text, "html.parser")
+            blocchi = soup.select(".result") or soup.select(".web-result")
+            
+            for r in blocchi[:10]:
+                title_elem = r.select_one(".result__title a") or r.select_one(".result__a")
+                snippet_elem = r.select_one(".result__snippet")
+                if title_elem:
+                    risultati.append({
+                        "title": pulisci_testo_markdown(title_elem.get_text(strip=True)),
+                        "url": title_elem.get("href", ""),
+                        "content": pulisci_testo_markdown(snippet_elem.get_text(strip=True)) if snippet_elem else ""
+                    })
+        if risultati:
+            return risultati, "DuckDuckGo HTML"
+    except Exception:
+        pass
+
+    return [], "Nessuno"
+
+# --- LLM PROCESSING & FALLBACK ENGINE ---
+
+def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercato, api_key):
+    testo_grezzo = "\n\n".join([f"Titolo: {r['title']}\nURL: {r['url']}\nSnippet: {r['content']}" for r in risultati_web])
+    
+    if api_key:
+        try:
+            client = genai.Client(api_key=api_key)
+            prompt_completo = f"{prompt_sistema}\n\nDati dal web:\n{testo_grezzo}"
+            
+            for modello in MODELLI_IA:
+                try:
+                    response = client.models.generate_content(
+                        model=modello,
+                        contents=prompt_completo
+                    )
+                    if response and response.text:
+                        return response.text, f"IA ({modello})"
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # Fallback Deterministico
+    testo_fallback = f"### 📝 Recensioni e Sintesi Automatica ({prodotto_cercato})\n\n"
+    testo_fallback += "Basato sulle informazioni estratte dal web, ecco una panoramica rapida delle esperienze d'uso raccolte:\n\n"
+    
+    count_snippet = 0
+    for r in risultati_web:
+        if e_risultato_pertinente(r['title'], r['content'], prodotto_cercato) and count_snippet < 3:
+            testo_fallback += f"- *{r['content'][:120]}...*\n"
+            count_snippet += 1
+            
+    testo_fallback += "\n---\n\n### 📊 Tabella Prezzi e Offerte Rilevate\n\n"
+    head = "| Store / Titolo | Prezzo (€) | Link |\n| :--- | :--- | :--- |\n"
+    tabella_diretta = head
+    conteggio_validi = 0
+    
+    for r in risultati_web:
+        if e_risultato_pertinente(r['title'], r['content'], prodotto_cercato):
+            titolo_pulito = r['title'][:55]
+            prezzo = estrai_prezzo_da_testo(f"{r['title']} {r['content']}")
+            tabella_diretta += f"| **{titolo_pulito}** | `{prezzo}` | [Vai al sito]({r['url']}) |\n"
+            conteggio_validi += 1
+
+    if conteggio_validi
