@@ -29,10 +29,11 @@ st.sidebar.header("🔑 Configurazione")
 openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.sidebar.text_input("OpenRouter API Key (Gratis)", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Modelli gratuiti attualmente attivi e stabili su OpenRouter
+# Modelli gratuiti aggiornati e attivi su OpenRouter
 MODELLI_IA = [
     'deepseek/deepseek-r1:free',
-    'meta-llama/llama-3.1-8b-instruct:free'
+    'deepseek/deepseek-chat:free',
+    'google/gemini-2.0-flash-lite-preview-02-05:free'
 ]
 
 def pulisci_testo_markdown(testo):
