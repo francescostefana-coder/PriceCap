@@ -24,17 +24,17 @@ st.markdown("""
 st.title("🛍️ TechAdvisor Italia")
 st.caption("Recensioni intelligenti, alternative e i 3 prezzi migliori dai reali e-commerce.")
 
-# Configurazione API e Modello personalizzabile dalla sidebar
+# Configurazione API
 st.sidebar.header("🔑 Configurazione")
 openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.sidebar.text_input("OpenRouter API Key (Gratis)", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Campo per scegliere o aggiornare al volo il modello gratuito da OpenRouter
-openrouter_model = st.sidebar.text_input(
-    "Modello OpenRouter", 
-    value="deepseek/deepseek-r1:free",
-    help="Prendi un modello gratuito da https://openrouter.ai/models?hide=paid e incollalo qui se il precedente non è più attivo."
-)
+# Modelli gratuiti di fallback con dicitura generica o modelli attivi
+MODELLI_IA = [
+    'openrouter/auto',  # Lascia che OpenRouter individui automaticamente un modello libero
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'google/gemini-2.0-flash-exp:free'
+]
 
 def pulisci_testo_markdown(testo):
     if not testo:
@@ -97,75 +97,11 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
 
     return [], "Nessuno"
 
-def genera_analisi_completa(prodotto, risultati_web, api_key, modello):
+def genera_analisi_completa(prodotto, risultati_web, api_key):
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
     prompt = (
         f"Sei un esperto tecnologico per il mercato italiano. "
         f"Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.\n\n"
         f"Crea una risposta strutturata esattamente nelle seguenti 4 sezioni in italiano:\n\n"
-        f"### Recensione Dettagliata\n"
-        f"- Scrivi una recensione approfondita e originale basata sulle reali esperienze d'uso.\n"
-        f"- Pro (Punti di forza): elenco puntato.\n"
-        f"- Contro (Limiti): elenco puntato.\n\n"
-        f"### Valide Alternative\n"
-        f"- Consiglia 2 o 3 prodotti alternativi sul mercato italiano.\n\n"
-        f"### Top 3 Prezzi e Offerte\n"
-        f"Crea una TABELLA Markdown ordinata dal prezzo piu basso con queste colonne:\n"
-        f"| Negozio | Prezzo (€) | Link Diretto |\n"
-        f"Includi i migliori 3 prezzi reali e usa la sintassi [Vai al Negozio](URL) per il link.\n\n"
-        f"Dati raccolti:\n{testo_grezzo}"
-    )
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-    )
-    
-    response = client.chat.completions.create(
-        model=modello,
-        messages=[{"role": "user", "content": prompt}],
-        extra_headers={
-            "HTTP-Referer": "https://github.com/pricecap",
-            "X-Title": "TechAdvisor Italia",
-        }
-    )
-    
-    if response and response.choices[0].message.content:
-        return response.choices[0].message.content, f"OpenRouter ({modello})"
-    
-    raise Exception("Risposta vuota da OpenRouter")
-
-# --- INTERFACCIA UTENTE ---
-
-prodotto_input = st.text_input("Cerca un prodotto elettronico:", placeholder="Es. iPhone 15, Sony WH-1000XM5, TV LG OLED...")
-
-col1, col2 = st.columns(2)
-with col1:
-    cerca_btn = st.button("Analizza e Trova Prezzi", type="primary")
-
-if cerca_btn:
-    if not prodotto_input.strip():
-        st.warning("Inserisci il nome di un prodotto elettronico.")
-    elif not openrouter_api_key.strip():
-        st.error("Inserisci la tua OpenRouter API Key nella barra laterale a sinistra.")
-    elif not openrouter_model.strip():
-        st.error("Inserisci il nome del modello OpenRouter nella barra laterale.")
-    else:
-        with st.status("Scansione e-commerce italiani autorizzati...", expanded=True) as status:
-            st.write("Filtro anti-aggregatori e blog in corso...")
-            risultati_web, fonte_ricerca = cerca_sul_web_sicura(tavily_api_key, prodotto_input)
-            
-            if not risultati_web:
-                status.update(label="Nessun riscontro trovato.", state="error")
-                st.warning("Prova a specificare meglio il modello esatto.")
-            else:
-                st.write(f"Elaborazione recensione e prezzi ({fonte_ricerca})...")
-                try:
-                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, openrouter_api_key, openrouter_model)
-                    status.update(label=f"Analisi completata ({modalita})!", state="complete")
-                    st.markdown("---")
-                    st.markdown(output_finale)
-                except Exception as e:
-                    status.update(label="Errore elaborazione IA", state="error")
-                    st.error(f"{e}")
+        f"
