@@ -148,6 +148,23 @@ def cerca_sul_web(tavily_key, prodotto):
     return [], "Nessuno"
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def modelli_gratuiti(api_key):
+    """Legge da OpenRouter i modelli davvero gratuiti oggi (i nomi cambiano spesso)."""
+    try:
+        r = requests.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        ids = [m["id"] for m in r.json().get("data", []) if m.get("id", "").endswith(":free")]
+    except Exception:
+        return []
+    preferiti = ("llama", "gemma", "qwen", "mistral", "deepseek", "gpt-oss")
+    ids.sort(key=lambda i: next((n for n, k in enumerate(preferiti) if k in i), len(preferiti)))
+    return ids
+
+
 def genera_analisi(prodotto, risultati_web, api_key):
     testo = "\n\n".join(
         f"Store/Titolo: {r['title']}\nURL: {r['url']}\n"
@@ -173,20 +190,22 @@ DATI:
 {testo}"""
 
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    ultimo_errore = None
-    for modello in MODELLI_IA:
+    candidati = list(dict.fromkeys(modelli_gratuiti(api_key) + MODELLI_IA))[:8]
+    errori = []
+    for modello in candidati:
         try:
             resp = client.chat.completions.create(
                 model=modello,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=60,
             )
-            contenuto = resp.choices[0].message.content
+            contenuto = (resp.choices[0].message.content or "").strip() if resp.choices else ""
             if contenuto:
                 return contenuto, modello
+            errori.append(f"{modello}: risposta vuota")
         except Exception as e:
-            ultimo_errore = e
-    raise RuntimeError(f"Tutti i modelli hanno fallito. Ultimo errore: {ultimo_errore}")
+            errori.append(f"{modello}: {str(e)[:160]}")
+    raise RuntimeError("Nessun modello ha risposto.\n\n" + "\n".join(f"- {x}" for x in errori))
 
 
 REGEX_ASIN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
