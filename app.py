@@ -103,7 +103,7 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
     return [], "Nessuno"
 
 def genera_analisi_completa(prodotto, risultati_web, api_key):
-    """Usa Gemini per elaborare recensione, pro/contro, alternative e top 3 prezzi."""
+    """Usa Gemini per elaborare recensione, pro/contro, alternative e top 3 prezzi con debug dell'errore."""
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
     prompt = (
@@ -124,18 +124,21 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
         f"- Inserisci solo i **migliori 3 prezzi reali** trovati.\n"
         f"- Usa la sintassi Markdown `[Vai al Negozio](URL)` per la colonna del link.\n\n"
         f"Dati di e-commerce raccolti:\n{testo_grezzo}"
-    )
+    ]
 
     client = genai.Client(api_key=api_key)
+    ultimo_errore = ""
+    
     for modello in MODELLI_IA:
         try:
             response = client.models.generate_content(model=modello, contents=prompt)
             if response and response.text:
                 return response.text, f"IA ({modello})"
-        except Exception:
+        except Exception as e:
+            ultimo_errore = str(e)
             continue
             
-    raise Exception("Impossibile contattare i modelli Gemini con la chiave fornita.")
+    raise Exception(f"Errore tecnico da Google API: {ultimo_errore}")
 
 # --- INTERFACCIA UTENTE ---
 
@@ -167,4 +170,4 @@ if cerca_btn:
                     st.markdown(output_finale)
                 except Exception as e:
                     status.update(label="❌ Errore durante l'elaborazione dell'IA.", state="error")
-                    st.error(f"Dettaglio errore: {e}")
+                    st.error(f"{e}")
