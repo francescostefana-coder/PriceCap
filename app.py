@@ -103,27 +103,24 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
     return [], "Nessuno"
 
 def genera_analisi_completa(prodotto, risultati_web, api_key):
-    """Usa Gemini per elaborare recensione, pro/contro, alternative e top 3 prezzi con debug dell'errore."""
+    """Usa Gemini per elaborare recensione, pro/contro, alternative e top 3 prezzi."""
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
     prompt = (
-        f"Sei un esperto tecnologico e consumer advocate per il mercato italiano. "
+        f"Sei un esperto tecnologico per il mercato italiano. "
         f"Analizza i dati di e-commerce reali raccolti per il prodotto: '{prodotto}'.\n\n"
         f"Crea una risposta strutturata esattamente nelle seguenti 4 sezioni in italiano:\n\n"
-        f"### 📝 1. Recensione Chiara e Rielaborata\n"
-        f"- Scrivi una recensione approfondita, originale e fruibile da chiunque (senza copia-incolla meccanico), basata sulle reali esperienze d'uso.\n"
-        f"- **Pro (Punti di forza):** Elenco puntato chiaro.\n"
-        f"- **Contro (Limiti/Difetti):** Elenco puntato chiaro.\n\n"
-        f"### 🔄 2. Valide Alternative\n"
-        f"- Consiglia 2 o 3 prodotti alternativi presenti sul mercato italiano della stessa categoria o fascia di prezzo, spiegando brevemente perché sceglierli.\n\n"
-        f"### 📊 3. Top 3 Prezzi e Offerte\n"
-        f"Crea una TABELLA Markdown ordinata dal prezzo più basso con esattamente queste colonne:\n"
-        f"| E-commerce / Negozio | Prezzo (€) | Link Diretto |\n"
-        f"REGOLE TABELLA:\n"
-        f"- Estrai e deduci i prezzi reali in Euro dai dati forniti per gli store.\n"
-        f"- Inserisci solo i **migliori 3 prezzi reali** trovati.\n"
-        f"- Usa la sintassi Markdown `[Vai al Negozio](URL)` per la colonna del link.\n\n"
-        f"Dati di e-commerce raccolti:\n{testo_grezzo}"
+        f"### Recensione Dettagliata\n"
+        f"- Scrivi una recensione approfondita e originale basata sulle reali esperienze d'uso.\n"
+        f"- Pro (Punti di forza): elenco puntato.\n"
+        f"- Contro (Limiti): elenco puntato.\n\n"
+        f"### Valide Alternative\n"
+        f"- Consiglia 2 o 3 prodotti alternativi sul mercato italiano.\n\n"
+        f"### Top 3 Prezzi e Offerte\n"
+        f"Crea una TABELLA Markdown ordinata dal prezzo piu basso con queste colonne:\n"
+        f"| Negozio | Prezzo (€) | Link Diretto |\n"
+        f"Includi i migliori 3 prezzi reali e usa la sintassi [Vai al Negozio](URL) per il link.\n\n"
+        f"Dati raccolti:\n{testo_grezzo}"
     )
 
     client = genai.Client(api_key=api_key)
@@ -138,35 +135,36 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
             ultimo_errore = str(e)
             continue
             
-    raise Exception(f"Errore tecnico da Google API: {ultimo_errore}")
+    raise Exception(f"Errore Google API: {ultimo_errore}")
 
 # --- INTERFACCIA UTENTE ---
 
-prodotto_input = st.text_input("🔍 Cerca un prodotto elettronico:", placeholder="Es. iPhone 15, Sony WH-1000XM5, TV LG OLED...")
+prodotto_input = st.text_input("Cerca un prodotto elettronico:", placeholder="Es. iPhone 15, Sony WH-1000XM5, TV LG OLED...")
 
 col1, col2 = st.columns(2)
 with col1:
-    cerca_btn = st.button("🚀 Analizza e Trova Prezzi", type="primary")
+    cerca_btn = st.button("Analizza e Trova Prezzi", type="primary")
 
 if cerca_btn:
     if not prodotto_input.strip():
-        st.warning("⚠️ Inserisci il nome di un prodotto elettronico.")
+        st.warning("Inserisci il nome di un prodotto elettronico.")
     elif not gemini_api_key.strip():
-        st.error("⚠️ **Attenzione:** Inserisci la tua **Gemini API Key** nella barra laterale a sinistra per generare la recensione e trovare i prezzi!")
+        st.error("Inserisci la tua Gemini API Key nella barra laterale a sinistra.")
     else:
-        with st.status("🔍 Scansione e-commerce italiani autorizzati...", expanded=True) as status:
-            st.write("Filtro rigoroso anti-aggregatori e blog in corso...")
+        with st.status("Scansione e-commerce italiani autorizzati...", expanded=True) as status:
+            st.write("Filtro anti-aggregatori e blog in corso...")
             risultati_web, fonte_ricerca = cerca_sul_web_sicura(tavily_api_key, prodotto_input)
             
             if not risultati_web:
-                status.update(label="❌ Nessun riscontro diretto trovato sugli store.", state="error")
-                st.warning("Prova a specificare meglio il modello esatto del prodotto (es. marca + modello completo).")
+                status.update(label="Nessun riscontro trovato.", state="error")
+                st.warning("Prova a specificare meglio il modello esatto.")
             else:
-                st.write(f"🤖 Elaborazione recensione, pro/contro e top prezzi ({fonte_ricerca})...")
+                st.write(f"Elaborazione recensione e prezzi ({fonte_ricerca})...")
                 try:
                     output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, gemini_api_key)
-                    status.update(label=f"✅ Analisi completata con successo!", state="complete")
+                    status.update(label="Analisi completata con successo!", state="complete")
                     st.markdown("---")
                     st.markdown(output_finale)
                 except Exception as e:
-                    status.update(label="❌ Errore durante l'elabor
+                    status.update(label="Errore elaborazione IA", state="error")
+                    st.error(f"{e}")
