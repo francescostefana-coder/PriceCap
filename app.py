@@ -1,6 +1,7 @@
 import re
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import TimeoutError as FuturesTimeout
 
 import pandas as pd
 import requests
@@ -104,7 +105,7 @@ def cerca_sul_web(tavily_key, prodotto):
                     "include_answer": False,
                     "include_domains": STORE_DOMINI,
                 },
-                timeout=10,
+                timeout=6,
             )
             if res.status_code == 200:
                 for r in res.json().get("results", []):
@@ -125,7 +126,7 @@ def cerca_sul_web(tavily_key, prodotto):
             "https://html.duckduckgo.com/html/",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
             data={"q": query},
-            timeout=10,
+            timeout=6,
         )
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
@@ -156,7 +157,7 @@ def modelli_gratuiti(api_key):
         r = requests.get(
             "https://openrouter.ai/api/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10,
+            timeout=5,
         )
         ids = [m["id"] for m in r.json().get("data", []) if m.get("id", "").endswith(":free")]
     except Exception:
@@ -203,7 +204,7 @@ def filtra_store(risultati):
 def _controlla_link(r):
     """True se la pagina sembra esistere. Se lo store blocca il controllo (403/429/timeout) la tengo."""
     try:
-        res = requests.get(r["url"], headers=UA, timeout=6, allow_redirects=True)
+        res = requests.get(r["url"], headers=UA, timeout=4, allow_redirects=True)
     except requests.RequestException:
         return True
     if res.status_code in (404, 410):
@@ -220,17 +221,30 @@ def _controlla_link(r):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def verifica_link(risultati):
+    """Controlla i link in parallelo con un tetto di 8 secondi in totale: quelli non verificati restano."""
     if not risultati:
         return []
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        esiti = list(ex.map(_controlla_link, risultati))
-    return [r for r, ok in zip(risultati, esiti) if ok]
+    risultati = risultati[:8]
+    ex = ThreadPoolExecutor(max_workers=8)
+    futuri = [ex.submit(_controlla_link, r) for r in risultati]
+    fatti, _ = wait(futuri, timeout=8)
+    ex.shutdown(wait=False, cancel_futures=True)
+
+    def valido(f):
+        if f not in fatti:
+            return True
+        try:
+            return f.result()
+        except Exception:
+            return True
+
+    return [r for r, f in zip(risultati, futuri) if valido(f)]
 
 
 def ddg_cerca(query, max_risultati=8):
     out = []
     try:
-        res = requests.post("https://html.duckduckgo.com/html/", headers=UA, data={"q": query}, timeout=10)
+        res = requests.post("https://html.duckduckgo.com/html/", headers=UA, data={"q": query}, timeout=6)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
             for r in soup.select(".result")[:max_risultati]:
@@ -257,8 +271,8 @@ def cerca_info_prodotto(tavily_key, prodotto):
             res = requests.post(
                 "https://api.tavily.com/search",
                 headers={"Authorization": f"Bearer {tavily_key}"},
-                json={"query": query, "search_depth": "basic", "max_results": 6, "include_answer": False},
-                timeout=10,
+                json={"query": query, "search_depth": "basic", "max_results": 5, "include_answer": False},
+                timeout=6,
             )
             if res.status_code == 200:
                 out = [{
@@ -277,11 +291,11 @@ def genera_analisi(prodotto, offerte, info_web, api_key):
     testo_offerte = "\n\n".join(
         f"Store/Titolo: {r['title']}\nURL: {r['url']}\n"
         f"Prezzo rilevato: {estrai_prezzo(r['title'] + ' ' + r['content']) or 'non indicato'}"
-        for r in offerte
+        for r in offerte[:8]
     ) or "(nessuna offerta valida trovata)"
 
     testo_info = "\n\n".join(
-        f"Fonte: {r['title']}\nInfo: {r['content'][:600]}" for r in info_web
+        f"Fonte: {r['title']}\nInfo: {r['content'][:400]}" for r in info_web[:5]
     ) or "(nessuna informazione trovata)"
 
     prompt = f"""Sei un esperto tecnologico per il mercato italiano.
@@ -312,22 +326,35 @@ INFORMAZIONI WEB:
 OFFERTE NEGOZI:
 {testo_offerte}"""
 
-    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    candidati = list(dict.fromkeys(modelli_gratuiti(api_key) + MODELLI_IA))[:8]
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key, max_retries=0)
+    candidati = list(dict.fromkeys(modelli_gratuiti(api_key) + MODELLI_IA))[:4]
+
+    def prova(modello):
+        resp = client.chat.completions.create(
+            model=modello,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2000,
+            timeout=45,
+        )
+        testo = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+        if not testo:
+            raise RuntimeError("risposta vuota")
+        return testo, modello
+
+    # Lancio i modelli insieme e uso il primo che risponde, invece di provarli uno dopo l'altro
     errori = []
-    for modello in candidati:
-        try:
-            resp = client.chat.completions.create(
-                model=modello,
-                messages=[{"role": "user", "content": prompt}],
-                timeout=90,
-            )
-            contenuto = (resp.choices[0].message.content or "").strip() if resp.choices else ""
-            if contenuto:
-                return contenuto, modello
-            errori.append(f"{modello}: risposta vuota")
-        except Exception as e:
-            errori.append(f"{modello}: {str(e)[:160]}")
+    ex = ThreadPoolExecutor(max_workers=len(candidati))
+    futuri = {ex.submit(prova, m): m for m in candidati}
+    try:
+        for f in as_completed(futuri, timeout=60):
+            try:
+                return f.result()
+            except Exception as e:
+                errori.append(f"{futuri[f]}: {str(e)[:160]}")
+    except FuturesTimeout:
+        errori.append("tempo scaduto (60 secondi)")
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     raise RuntimeError("Nessun modello ha risposto.\n\n" + "\n".join(f"- {x}" for x in errori))
 
 
@@ -349,7 +376,7 @@ def storico_prezzi_keepa(keepa_key, asin, giorni=180):
     res = requests.get(
         "https://api.keepa.com/product",
         params={"key": keepa_key, "domain": 8, "asin": asin},
-        timeout=30,
+        timeout=15,
     )
     if res.status_code != 200:
         raise RuntimeError(f"Keepa ha risposto HTTP {res.status_code}")
@@ -417,10 +444,12 @@ if st.button("🔎 Analizza e confronta prezzi"):
 
             st.subheader("📈 Andamento prezzo (ultimi 6 mesi)")
             asin = estrai_asin(risultati)
+            if asin:
+                st.link_button("📈 Vedi lo storico prezzi su Keepa", f"https://keepa.com/#!product/8-{asin}")
             if not keepa_api_key:
                 st.info(
-                    "Per il grafico serve una chiave Keepa (keepa.com/api). "
-                    "Senza storico reale non mostro dati inventati."
+                    "Il grafico dentro l'app richiede una chiave Keepa (a pagamento). "
+                    "Intanto puoi aprire lo storico sul sito con il pulsante qui sopra."
                 )
             elif not asin:
                 st.info("Nessuna pagina Amazon.it trovata nei risultati: non posso ricavare lo storico.")
