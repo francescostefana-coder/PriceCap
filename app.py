@@ -28,13 +28,11 @@ BLACKLIST_TERMINI = ["come scaricare", "come fare", "guida tutorial", "scarica g
 # --- UTILITIES & PARSING ---
 
 def pulisci_testo_markdown(testo):
-    """Rimuove caratteri che potrebbero rompere la tabella o il layout Markdown."""
     if not testo:
         return ""
     return testo.replace("|", "-").replace("[", "(").replace("]", ")").replace("\n", " ").strip()
 
 def estrai_prezzo_da_testo(testo):
-    """Regex ottimizzato per rilevare prezzi in Euro in formati italiani ed europei."""
     match = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)\s*€|€\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)', testo)
     if match:
         p = match.group(1) or match.group(2)
@@ -42,24 +40,19 @@ def estrai_prezzo_da_testo(testo):
     return "Vedi link"
 
 def e_risultato_pertinente(titolo, snippet, prodotto_cercato):
-    """Filtro euristico per scartare spam e guide non inerenti."""
     testo_totale = f"{titolo} {snippet}".lower()
-    
     for bad_word in BLACKLIST_TERMINI:
         if bad_word in testo_totale:
             return False
-            
     parole_prodotto = [p.lower() for p in prodotto_cercato.split() if len(p) > 2]
     if not parole_prodotto:
         return True
-        
     matches = sum(1 for p in parole_prodotto if p in testo_totale)
     return (matches / len(parole_prodotto)) >= 0.4
 
 # --- AI & VISION SERVICE ---
 
 def identifica_prodotto_da_foto(image_file, api_key):
-    """Analisi visiva dell'immagine con gestione robusta delle eccezioni."""
     if not api_key:
         return ""
     try:
@@ -84,7 +77,6 @@ def identifica_prodotto_da_foto(image_file, api_key):
 # --- SEARCH ENGINE SERVICE ---
 
 def cerca_sul_web_sicura(tavily_key, query):
-    """Ricerca a 2 livelli: Tavily API -> DuckDuckGo HTML Fallback."""
     risultati = []
     
     # 1. Tavily API
@@ -112,7 +104,7 @@ def cerca_sul_web_sicura(tavily_key, query):
         except Exception:
             pass
 
-    # 2. DuckDuckGo HTML Scraping (Fallback resiliente)
+    # 2. DuckDuckGo HTML Scraping (Fallback)
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
         query_encoded = urllib.parse.quote(query)
@@ -120,26 +112,4 @@ def cerca_sul_web_sicura(tavily_key, query):
         res = requests.post(url, headers=headers, data={'q': query}, timeout=4)
         
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, "html.parser")
-            blocchi = soup.select(".result") or soup.select(".web-result")
-            
-            for r in blocchi[:10]:
-                title_elem = r.select_one(".result__title a") or r.select_one(".result__a")
-                snippet_elem = r.select_one(".result__snippet")
-                if title_elem:
-                    risultati.append({
-                        "title": pulisci_testo_markdown(title_elem.get_text(strip=True)),
-                        "url": title_elem.get("href", ""),
-                        "content": pulisci_testo_markdown(snippet_elem.get_text(strip=True)) if snippet_elem else ""
-                    })
-        if risultati:
-            return risultati, "DuckDuckGo HTML"
-    except Exception:
-        pass
-
-    return [], "Nessuno"
-
-# --- LLM PROCESSING & FALLBACK ENGINE ---
-
-def elabora_con_gemini_o_fallback(prompt_sistema, risultati_web, prodotto_cercato, api_key):
-    """Generazione recensione + tabella tramite LLM con Fallback automatico anti-503
+            soup = BeautifulSoup(res.
