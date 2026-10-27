@@ -24,18 +24,17 @@ st.markdown("""
 st.title("🛍️ TechAdvisor Italia")
 st.caption("Recensioni intelligenti, alternative e i 3 prezzi migliori dai reali e-commerce.")
 
-# Configurazione API (legge automaticamente dai Secrets se configurati)
+# Configurazione API e Modello personalizzabile dalla sidebar
 st.sidebar.header("🔑 Configurazione")
 openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.sidebar.text_input("OpenRouter API Key (Gratis)", type="password")
 tavily_api_key = st.secrets.get("TAVILY_API_KEY", "") or st.sidebar.text_input("Tavily API Key (Opzionale)", type="password")
 
-# Nuova lista pulita con i modelli gratuiti attivi e stabili
-MODELLI_IA = [
-    'deepseek/deepseek-r1:free',
-    'deepseek/deepseek-chat:free',
-    'google/gemma-2-9b-it:free',
-    'qwen/qwen-2.5-7b-instruct:free'
-]
+# Campo per scegliere o aggiornare al volo il modello gratuito da OpenRouter
+openrouter_model = st.sidebar.text_input(
+    "Modello OpenRouter", 
+    value="deepseek/deepseek-r1:free",
+    help="Prendi un modello gratuito da https://openrouter.ai/models?hide=paid e incollalo qui se il precedente non è più attivo."
+)
 
 def pulisci_testo_markdown(testo):
     if not testo:
@@ -98,7 +97,7 @@ def cerca_sul_web_sicura(tavily_key, query_prodotto):
 
     return [], "Nessuno"
 
-def genera_analisi_completa(prodotto, risultati_web, api_key):
+def genera_analisi_completa(prodotto, risultati_web, api_key, modello):
     testo_grezzo = "\n\n".join([f"Store/Titolo: {r['title']}\nURL: {r['url']}\nInfo: {r['content']}" for r in risultati_web])
     
     prompt = (
@@ -123,25 +122,19 @@ def genera_analisi_completa(prodotto, risultati_web, api_key):
         api_key=api_key,
     )
     
-    ultimo_errore = ""
+    response = client.chat.completions.create(
+        model=modello,
+        messages=[{"role": "user", "content": prompt}],
+        extra_headers={
+            "HTTP-Referer": "https://github.com/pricecap",
+            "X-Title": "TechAdvisor Italia",
+        }
+    )
     
-    for modello in MODELLI_IA:
-        try:
-            response = client.chat.completions.create(
-                model=modello,
-                messages=[{"role": "user", "content": prompt}],
-                extra_headers={
-                    "HTTP-Referer": "https://github.com/pricecap",
-                    "X-Title": "TechAdvisor Italia",
-                }
-            )
-            if response and response.choices[0].message.content:
-                return response.choices[0].message.content, f"OpenRouter ({modello})"
-        except Exception as e:
-            ultimo_errore = str(e)
-            continue
-            
-    raise Exception(f"Errore OpenRouter: {ultimo_errore}")
+    if response and response.choices[0].message.content:
+        return response.choices[0].message.content, f"OpenRouter ({modello})"
+    
+    raise Exception("Risposta vuota da OpenRouter")
 
 # --- INTERFACCIA UTENTE ---
 
@@ -156,6 +149,8 @@ if cerca_btn:
         st.warning("Inserisci il nome di un prodotto elettronico.")
     elif not openrouter_api_key.strip():
         st.error("Inserisci la tua OpenRouter API Key nella barra laterale a sinistra.")
+    elif not openrouter_model.strip():
+        st.error("Inserisci il nome del modello OpenRouter nella barra laterale.")
     else:
         with st.status("Scansione e-commerce italiani autorizzati...", expanded=True) as status:
             st.write("Filtro anti-aggregatori e blog in corso...")
@@ -167,7 +162,7 @@ if cerca_btn:
             else:
                 st.write(f"Elaborazione recensione e prezzi ({fonte_ricerca})...")
                 try:
-                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, openrouter_api_key)
+                    output_finale, modalita = genera_analisi_completa(prodotto_input, risultati_web, openrouter_api_key, openrouter_model)
                     status.update(label=f"Analisi completata ({modalita})!", state="complete")
                     st.markdown("---")
                     st.markdown(output_finale)
